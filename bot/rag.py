@@ -1,134 +1,241 @@
+"""LightRAG-backed retrieval and answering.
+
+The pipeline:
+
+  question
+     │
+     ▼
+  ┌─────────────────────────────────────────────────┐
+  │ LightRAG (mode=mix)                             │
+  │                                                 │
+  │   1. extract entities from question             │ ← LLM
+  │   2. vector search over chunks (cosine, 384-d)  │ ← embedder
+  │   3. graph traversal over entity/relation graph │
+  │   4. assemble context, generate answer          │ ← LLM
+  └─────────────────────────────────────────────────┘
+     │
+     ▼
+  RagAnswer { text, sources, raw_context, mode }
+
+Storage backends are all local files under WORKING_DIR:
+  - JsonKVStorage    (full text + metadata)
+  - NanoVectorDB     (chunk + entity + relation embeddings)
+  - NetworkXStorage  (entity / relation knowledge graph)
+"""
+
 from __future__ import annotations
 
 import os
-import pickle
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+from lightrag import LightRAG, QueryParam
+from lightrag.kg.shared_storage import initialize_pipeline_status
+from lightrag.llm.ollama import ollama_model_complete
+from lightrag.llm.openai import openai_complete_if_cache
+from lightrag.utils import EmbeddingFunc, setup_logger
 from sentence_transformers import SentenceTransformer
 
-CHUNK_TARGET_CHARS = 900
-CHUNK_OVERLAP_CHARS = 150
+DEFAULT_WORKING_DIR = "./rag_storage"
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_OLLAMA_LLM = "qwen2.5:7b"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_BASE = "https://api.groq.com/openai/v1"
+DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_EMBED_DIM = 384
+DEFAULT_QUERY_MODE = "mix"
+DEFAULT_LLM_NUM_CTX = 16384
 
 
 @dataclass
-class Chunk:
+class RagAnswer:
     text: str
-    source: str
-
-    def short_source(self) -> str:
-        return Path(self.source).name
+    sources: list[str]
+    mode: str
 
 
-@dataclass
-class Hit:
-    chunk: Chunk
-    score: float
+def _build_embedding_func(model_name: str | None = None) -> EmbeddingFunc:
+    name = model_name or os.environ.get("EMBED_MODEL", DEFAULT_EMBED_MODEL)
+    model = SentenceTransformer(name)
+    dim = model.get_sentence_embedding_dimension() or DEFAULT_EMBED_DIM
 
-
-def _chunk_text(text: str) -> list[str]:
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    chunks: list[str] = []
-    buf: list[str] = []
-    buf_len = 0
-    for p in paragraphs:
-        if buf_len + len(p) + 2 > CHUNK_TARGET_CHARS and buf:
-            chunks.append("\n\n".join(buf))
-            tail = chunks[-1][-CHUNK_OVERLAP_CHARS:]
-            buf = [tail]
-            buf_len = len(tail)
-        buf.append(p)
-        buf_len += len(p) + 2
-    if buf:
-        chunks.append("\n\n".join(buf))
-    return chunks
-
-
-def _walk_corpus(corpus_dir: Path) -> list[tuple[Path, str]]:
-    files: list[tuple[Path, str]] = []
-    for path in sorted(corpus_dir.rglob("*")):
-        if path.suffix.lower() not in {".md", ".txt"}:
-            continue
-        if path.name.lower() == "readme.md":
-            continue
-        files.append((path, path.read_text(encoding="utf-8")))
-    return files
-
-
-class Index:
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-        self.model: SentenceTransformer | None = None
-        self.chunks: list[Chunk] = []
-        self.embeddings: np.ndarray | None = None
-
-    def _ensure_model(self) -> SentenceTransformer:
-        if self.model is None:
-            self.model = SentenceTransformer(self.model_name)
-        return self.model
-
-    def build(self, corpus_dir: Path) -> int:
-        files = _walk_corpus(corpus_dir)
-        if not files:
-            raise RuntimeError(
-                f"No .md or .txt files found under {corpus_dir}. "
-                "Drop your rules into corpus/ and re-run."
-            )
-        chunks: list[Chunk] = []
-        for path, text in files:
-            for piece in _chunk_text(text):
-                chunks.append(Chunk(text=piece, source=str(path)))
-        model = self._ensure_model()
-        embeddings = model.encode(
-            [c.text for c in chunks],
+    async def _embed(texts: list[str]) -> np.ndarray:
+        vecs = model.encode(
+            texts,
             normalize_embeddings=True,
-            show_progress_bar=True,
             convert_to_numpy=True,
+            show_progress_bar=False,
         )
-        self.chunks = chunks
-        self.embeddings = embeddings.astype(np.float32)
-        return len(chunks)
+        return vecs.astype(np.float32)
 
-    def save(self, path: Path) -> None:
-        if self.embeddings is None:
-            raise RuntimeError("Index is empty; call build() first.")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("wb") as f:
-            pickle.dump(
-                {
-                    "model_name": self.model_name,
-                    "chunks": self.chunks,
-                    "embeddings": self.embeddings,
-                },
-                f,
-            )
-
-    @classmethod
-    def load(cls, path: Path) -> Index:
-        with path.open("rb") as f:
-            data = pickle.load(f)
-        idx = cls(data["model_name"])
-        idx.chunks = data["chunks"]
-        idx.embeddings = data["embeddings"]
-        return idx
-
-    def query(self, question: str, k: int = 3) -> list[Hit]:
-        if self.embeddings is None or not self.chunks:
-            return []
-        model = self._ensure_model()
-        q = model.encode(
-            [question], normalize_embeddings=True, convert_to_numpy=True
-        )[0].astype(np.float32)
-        scores = self.embeddings @ q
-        top = np.argsort(-scores)[:k]
-        return [Hit(chunk=self.chunks[i], score=float(scores[i])) for i in top]
+    return EmbeddingFunc(
+        embedding_dim=dim,
+        func=_embed,
+        max_token_size=512,
+        model_name=name.split("/")[-1],
+    )
 
 
-def default_index_path() -> Path:
-    return Path(os.environ.get("INDEX_PATH", "data/index.pkl"))
+def _ollama_llm_kwargs() -> dict[str, Any]:
+    host = os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
+    num_ctx = int(os.environ.get("OLLAMA_NUM_CTX", str(DEFAULT_LLM_NUM_CTX)))
+    return {
+        "host": host,
+        "options": {"num_ctx": num_ctx},
+        "timeout": float(os.environ.get("OLLAMA_TIMEOUT", "300")),
+    }
+
+
+def _groq_llm_func():
+    """Return an LightRAG-compatible llm_model_func that calls Groq via the
+    OpenAI-compatible endpoint. Pre-binds model + base_url + api_key."""
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY is empty but Groq LLM was requested. "
+            "Set GROQ_API_KEY in .env or pass use_groq_llm=False."
+        )
+    model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    base_url = os.environ.get("GROQ_BASE_URL", DEFAULT_GROQ_BASE)
+
+    async def _func(prompt, system_prompt=None, history_messages=None, **kwargs):
+        return await openai_complete_if_cache(
+            model,
+            prompt,
+            system_prompt=system_prompt,
+            history_messages=history_messages or [],
+            base_url=base_url,
+            api_key=api_key,
+            **{k: v for k, v in kwargs.items() if k != "hashing_kv"},
+        )
+
+    _func.__name__ = "groq_complete"  # LightRAG inspects this
+    return _func, model
+
+
+async def build_rag(
+    working_dir: str | None = None,
+    use_groq_llm: bool = False,
+) -> LightRAG:
+    """Construct a LightRAG instance.
+
+    use_groq_llm=True routes the LLM to Groq (fast, free tier, OpenAI-compatible).
+    Default is local Ollama. Embeddings always come from sentence-transformers.
+
+    Loads existing storage if working_dir is already populated.
+    """
+    setup_logger("lightrag", level="INFO")
+    wd = working_dir or os.environ.get("LIGHTRAG_WORKING_DIR", DEFAULT_WORKING_DIR)
+    Path(wd).mkdir(parents=True, exist_ok=True)
+
+    if use_groq_llm:
+        llm_func, llm_model_name = _groq_llm_func()
+        llm_kwargs: dict[str, Any] = {
+            "timeout": float(os.environ.get("GROQ_TIMEOUT", "60")),
+        }
+        max_async = int(os.environ.get("GROQ_MAX_ASYNC", "8"))
+    else:
+        llm_func = ollama_model_complete
+        llm_model_name = os.environ.get("OLLAMA_LLM_MODEL", DEFAULT_OLLAMA_LLM)
+        llm_kwargs = _ollama_llm_kwargs()
+        max_async = int(os.environ.get("LLM_MAX_ASYNC", "2"))
+
+    rag = LightRAG(
+        working_dir=wd,
+        llm_model_func=llm_func,
+        llm_model_name=llm_model_name,
+        llm_model_max_async=max_async,
+        llm_model_kwargs=llm_kwargs,
+        embedding_func=_build_embedding_func(),
+        chunk_token_size=int(os.environ.get("CHUNK_TOKEN_SIZE", "1200")),
+        chunk_overlap_token_size=int(os.environ.get("CHUNK_OVERLAP", "100")),
+        enable_llm_cache=True,
+    )
+    await rag.initialize_storages()
+    await initialize_pipeline_status()
+    return rag
+
+
+_REF_LINE_RE = re.compile(r"^\s*[-*]\s*\[\d+\]\s*(.+?\.md)\s*$", re.MULTILINE)
+_REF_HEADER_RE = re.compile(r"###?\s*References\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _extract_sources(answer_text: str) -> list[str]:
+    """Pull source filenames out of LightRAG's reference block.
+
+    LightRAG with include_references=True appends a section like:
+
+        ### References
+
+        - [1] Intra Meta FAQ - 42 Tokyo.md
+        - [2] Intra Meta ピアレビューについて.md
+
+    Returns filenames in citation order, deduped, preserving spaces.
+    """
+    if not answer_text:
+        return []
+    m = _REF_HEADER_RE.search(answer_text)
+    block = answer_text[m.end():] if m else answer_text
+    found: list[str] = []
+    for match in _REF_LINE_RE.finditer(block):
+        name = match.group(1).strip()
+        if name not in found:
+            found.append(name)
+    return found
+
+
+def strip_references_block(answer_text: str) -> str:
+    """Return the answer body with the trailing '### References' block removed."""
+    m = _REF_HEADER_RE.search(answer_text)
+    return answer_text[:m.start()].rstrip() if m else answer_text
+
+
+async def query(
+    rag: LightRAG,
+    question: str,
+    mode: str | None = None,
+    top_k: int | None = None,
+) -> RagAnswer:
+    """Run a query end-to-end. Returns the answer plus extracted source list."""
+    use_mode = mode or os.environ.get("LIGHTRAG_QUERY_MODE", DEFAULT_QUERY_MODE)
+    param = QueryParam(
+        mode=use_mode,
+        top_k=top_k or int(os.environ.get("LIGHTRAG_TOP_K", "20")),
+        include_references=True,
+        response_type="Conversational, friendly, 3-6 sentences",
+    )
+    text = await rag.aquery(question, param=param)
+    if not isinstance(text, str):
+        # mode 'stream' or unexpected return; coerce
+        text = str(text)
+    sources = _extract_sources(text)
+    body = strip_references_block(text).strip()
+    return RagAnswer(
+        text=body,
+        sources=sources,
+        mode=use_mode,
+    )
+
+
+async def insert_documents(rag: LightRAG, docs: list[tuple[str, str]]) -> None:
+    """Batch-insert documents.
+
+    `docs` is a list of (source_id, text). source_id is used as the
+    `file_path` so it appears in citation references.
+    """
+    if not docs:
+        return
+    file_paths = [src for src, _ in docs]
+    texts = [text for _, text in docs]
+    await rag.ainsert(texts, file_paths=file_paths)
 
 
 def default_corpus_path() -> Path:
     return Path(os.environ.get("CORPUS_PATH", "corpus"))
+
+
+def working_dir_path() -> Path:
+    return Path(os.environ.get("LIGHTRAG_WORKING_DIR", DEFAULT_WORKING_DIR))

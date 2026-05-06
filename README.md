@@ -1,14 +1,61 @@
 # 42Tokyo Discord QA Bot
 
-A staff-support Discord bot. Students ask questions in Discord with `/ask`;
-the bot answers from a vetted corpus of rules and procedures, citing the
-source. When it is not confident, it forwards the question to a staff
-channel instead of guessing.
+A staff-support Discord bot for 42Tokyo. Students ask questions in Discord
+with `/ask`; the bot answers from a curated knowledge graph of intra rules
+and procedures, citing the source. Greetings get a friendly reply; off-
+topic or low-confidence queries can be escalated to a staff channel.
 
-## Status
+Built around **LightRAG** (graph + vector retrieval) over the 42Tokyo
+intra knowledge base (60+ pages, mostly Japanese, some English).
 
-MVP. One slash command (`/ask`), one corpus folder, optional Groq for nicer
-phrasing, optional staff escalation channel.
+## Architecture
+
+```
+            ┌────────────────────────────────────────┐
+            │ Discord                                │
+            │     /ask <question>                    │
+            └──────────────────┬─────────────────────┘
+                               │
+                               ▼
+            ┌──────────────────────────────────────────┐
+            │ bot/__main__.py                          │
+            │   • greeting/intent gate                 │
+            │   • slash command, deferred reply        │
+            │   • answer / source / escalation embed   │
+            └──────────────────┬───────────────────────┘
+                               │
+                               ▼
+            ┌──────────────────────────────────────────┐
+            │ bot/rag.py — LightRAG (mode = mix)       │
+            │   1. extract entities from question      │  ← LLM
+            │   2. cosine over chunks (multilingual)   │  ← embedder
+            │   3. graph traversal entity / relation   │
+            │   4. assemble + answer with citations    │  ← LLM
+            └──┬─────────────────┬─────────────────────┘
+               │                 │
+               ▼                 ▼
+       sentence-transformers   Ollama   ────►  qwen2.5:7b  (queries, free, local)
+       paraphrase-multi-       (or)
+       lingual-MiniLM-L12-v2   Groq     ────►  qwen/qwen3-32b  (ingest, free*, fast)
+
+            ┌──────────────────────────────────────────┐
+            │ rag_storage/  (regenerable, gitignored)  │
+            │   ├─ KV (JSON)                           │
+            │   ├─ vector DB (NanoVectorDB)            │
+            │   └─ knowledge graph (NetworkX, .graphml)│
+            └──────────────────────────────────────────┘
+```
+
+\* Groq free tier caps at 6K tokens-per-minute per request; for the full
+ingest of this corpus, the local Ollama path is the practical default.
+See [LLM choices](#llm-choices) below.
+
+## What it answers
+
+Drop `.md` or `.txt` files into `corpus/`. The bot will retrieve and
+answer from them with inline citations. The default knowledge base
+includes 60 pages of converted 42Tokyo intra rules, peer-review
+guidelines, exam policies, campus rules, and FAQs.
 
 ## Quick start
 
@@ -16,14 +63,10 @@ phrasing, optional staff escalation channel.
 
 1. Go to <https://discord.com/developers/applications>, click **New Application**.
 2. Open the **Bot** tab → click **Reset Token** → copy the token.
-3. Under **Privileged Gateway Intents**, leave everything off (the bot does
-   not need them for slash commands).
-4. Open the **OAuth2 → URL Generator** tab.
+3. Open **OAuth2 → URL Generator**.
    - Scopes: `bot`, `applications.commands`
-   - Bot permissions: `Send Messages`, `Embed Links`, `Use Slash Commands`,
-     `Read Message History`
-5. Open the generated URL in a browser, choose your test server, and invite
-   the bot.
+   - Permissions: `View Channel`, `Send Messages`, `Embed Links`, `Read Message History`
+4. Open the generated URL in a browser, invite the bot to a test server.
 
 ### 2. Configure
 
@@ -31,69 +74,86 @@ phrasing, optional staff escalation channel.
 cp .env.example .env
 ```
 
-Fill in:
+At minimum set `DISCORD_TOKEN`. Strongly recommended: `DISCORD_GUILD_ID`
+(your test server's id, with Developer Mode on; right-click the server icon
+→ Copy Server ID) so slash commands sync instantly instead of taking up
+to an hour.
 
-- `DISCORD_TOKEN` — required, from step 1.
-- `DISCORD_GUILD_ID` — optional but strongly recommended in development.
-  Your test-server id (right-click the server in Discord with developer
-  mode on → Copy Server ID). Without this, slash commands take up to 1
-  hour to appear.
-- `GROQ_API_KEY` — optional. Sign up at <https://console.groq.com/keys>
-  for a free key. If empty, the bot returns the top-3 corpus chunks
-  verbatim instead of generating an answer.
-- `STAFF_CHANNEL_ID` — optional. Discord channel id where the bot posts
-  questions it cannot answer. Without it, escalation is silent.
-- `MIN_SIMILARITY` — escalation threshold. Default `0.35`. Raise it to
-  escalate more aggressively, lower it to be more lenient.
+Optional:
+- `GROQ_API_KEY` — fast ingest path. Free tier at <https://console.groq.com/keys>.
+- `STAFF_CHANNEL_ID` — where errors and escalations get posted.
 
-### 3. Add documents
-
-Drop `.md` or `.txt` files into `corpus/`. Replace `example-rules.md` with
-your own content. See `corpus/README.md` for format notes.
-
-### 4. Install + run
+### 3. Install Ollama + pull a model
 
 ```sh
-make install   # creates .venv and installs requirements
-make ingest    # builds the embedding index from corpus/
-make run       # starts the bot
+brew install ollama
+ollama serve &              # keep running in the background
+ollama pull qwen2.5:7b      # ~4.7 GB, used for query answer generation
 ```
 
-The first `ingest` downloads the embedding model (~80 MB). Subsequent
-runs are fast.
+### 4. Add corpus + ingest + run
 
-In Discord, type `/ask How does the Black Hole work?` and the bot replies
-with an answer plus the source filenames.
+```sh
+make install      # creates .venv, installs Python deps
+make convert      # only if you have raw HTML/PDF in Q&A/, see below
+make ingest       # build the LightRAG knowledge graph (slow first time)
+make run          # start the Discord bot
+```
 
-## How it works
+In Discord:
 
 ```
-                 +--------------+
-   /ask question | Discord bot  |
-   ------------> |  (bot/...)   |
-                 +------+-------+
-                        |
-                        v
-                 +------+-------+
-                 |  RAG index   |   sentence-transformers + cosine
-                 | (pickle on   |
-                 |  disk)       |
-                 +------+-------+
-                        |
-            top-3 chunks + scores
-                        |
-                        v
-        +--------+-+----+----+--------+
-        | score  | <  threshold       |
-        |  yes   |        no          |
-        +---+----+--------------------+
-            |              |
-            v              v
-       Escalate to     Generate with
-       staff channel   Groq (or fall
-       (no answer)     back to top-3
-                       chunks verbatim)
+/ask How does the Black Hole work?
+/ask ピアレビューはどうやるの？
+/ask hi
 ```
+
+The bot replies with an answer + the source filenames.
+
+## Inspecting the knowledge graph
+
+After ingest, launch the LightRAG webui:
+
+```sh
+make webui
+```
+
+Then open <http://localhost:9621> for a visual map of entities,
+relations, and source chunks.
+
+## Adding more documents
+
+The simple path:
+
+1. Drop `.md` or `.txt` files anywhere under `corpus/` (subdirs are walked).
+2. `make ingest` — LightRAG hashes content; unchanged docs are skipped.
+3. Restart the bot.
+
+If you have raw HTML pages saved from intra (Notion / Google Drive /
+Wiki style), drop them into `Q&A/` (gitignored) and run:
+
+```sh
+make convert      # scripts/convert_qa.py: trafilatura → markdown
+```
+
+This produces clean markdown in `corpus/intra/` ready to ingest.
+
+## LLM choices
+
+LightRAG calls the LLM at two distinct times:
+
+| Phase | What happens | Default | Why |
+|---|---|---|---|
+| **Ingest** | Entity / relation extraction per chunk | Ollama qwen2.5:7b | Free, runs locally, ~2–7h overnight on a Mac |
+| **Query** | Final answer generation | Ollama qwen2.5:7b | Free, private, ~30–90s per query |
+
+Set `GROQ_API_KEY` to switch ingest to Groq's free tier (~10x faster) —
+but be aware: Groq free tier caps at 6K tokens-per-minute, which is at
+or below LightRAG's prompt size. For this corpus, **stick with Ollama
+for ingest**. If you want fast Groq ingest, upgrade to Groq Dev tier
+(~$3 one-time for the full corpus).
+
+Queries always run on local Ollama for privacy and zero per-query cost.
 
 ## Project layout
 
@@ -101,23 +161,41 @@ with an answer plus the source filenames.
 discordBot/
 ├── bot/
 │   ├── __init__.py
-│   ├── __main__.py    # discord client + /ask command
-│   ├── ingest.py      # CLI: build the corpus index
-│   ├── llm.py         # optional Groq client
-│   └── rag.py         # chunking, embedding, retrieval
-├── corpus/            # your knowledge documents (.md, .txt)
-├── data/              # generated; index.pkl lives here (gitignored)
-├── research/          # design notes
+│   ├── __main__.py        # discord client + /ask + greeting gate
+│   ├── ingest.py          # CLI: corpus → LightRAG graph
+│   ├── llm.py             # deprecated stub (LightRAG handles generation)
+│   └── rag.py             # LightRAG wrapper, query, source extraction
+├── corpus/
+│   ├── README.md          # how to add documents
+│   └── intra/             # 60 converted intra pages (the knowledge base)
+├── scripts/
+│   ├── convert_qa.py      # HTML/PDF → markdown via trafilatura
+│   └── ingest_status.py   # progress / ETA snapshot for `make ingest-status`
+├── research/              # pre-build design notes
+├── Q&A/                   # local-only raw HTML/PDF source (gitignored)
+├── rag_storage/           # generated LightRAG state (gitignored)
 ├── .env.example
-├── Makefile
+├── Makefile               # install / ingest / run / webui / convert / status
 ├── README.md
 └── requirements.txt
 ```
 
+## Make targets
+
+| Target | What it does |
+|---|---|
+| `make install` | Create `.venv` and install requirements |
+| `make convert` | Convert raw HTML/PDF in `Q&A/` to markdown in `corpus/intra/` |
+| `make ingest` | Build the LightRAG graph (slow first time) |
+| `make ingest-status` | Show ingest progress, ETA, recent log lines |
+| `make ingest-tail` | `tail -f` the live ingest log |
+| `make run` | Start the Discord bot |
+| `make webui` | Launch the LightRAG visualization UI on `:9621` |
+| `make clean` | Remove generated state and pycache |
+
 ## Roadmap
 
-- LightRAG backend for graph-based retrieval over a larger corpus.
 - 42 API integration: identity verification, `/me` dashboard, Black Hole alerts.
-- Feedback loop: thumbs-up / thumbs-down reactions feed back into a
-  curated answer store.
+- Feedback loop: thumbs-up/down reactions feed a curated answer store.
 - Eval set + retrieval metrics.
+- Source-citation hyperlinks back to the source intra page.

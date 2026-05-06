@@ -11,3 +11,18 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
+
+# LightRAG persisted state (regenerable via `make ingest`)
+rag_storage/
+lightrag.log
+
+# Raw saved HTML/PDF from the intra. Local-only because: large (~8MB),
+# binary-ish (poor git diffs), and can be re-saved by the user from intra.
+# corpus/intra/ holds the converted markdown that the bot actually ingests.
+Q&A/
+
+# Local cleanup-review notes (per-session, not shared)
+REVIEW.md
+
+# legacy cosine pickle (no longer used)
+data/index.pkl

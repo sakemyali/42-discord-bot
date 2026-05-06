@@ -3,3 +3,7 @@ python-dotenv>=1.0
 sentence-transformers>=3.0
 numpy>=1.26
 httpx>=0.27
+lightrag-hku>=1.4
+trafilatura>=2.0
+markdownify>=1.2
+beautifulsoup4>=4.14
