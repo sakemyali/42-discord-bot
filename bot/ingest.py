@@ -47,18 +47,16 @@ async def _run() -> int:
     if not docs:
         print(f"no .md / .txt files under {corpus_dir}", file=sys.stderr)
         return 1
-    use_groq = bool(os.environ.get("GROQ_API_KEY", "").strip())
-    if os.environ.get("INGEST_LLM", "auto").lower() == "ollama":
-        use_groq = False
+    from .rag import detect_llm_provider
+
+    provider = detect_llm_provider()
+    pretty = {
+        "gemini": f"Gemini {os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash-lite')} — free tier (15 RPM, 1000 RPD)",
+        "groq":   f"Groq {os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')} — fast path (paid recommended for full ingest)",
+        "ollama": f"Ollama {os.environ.get('OLLAMA_LLM_MODEL', 'qwen2.5:7b')} — local (slow, ~5-7h on full corpus)",
+    }[provider]
     print(f"found {len(docs)} documents in {corpus_dir}")
-    if use_groq:
-        print(
-            f"LLM (ingest) : Groq {os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')} — fast path"
-        )
-    else:
-        print(
-            f"LLM (ingest) : Ollama {os.environ.get('OLLAMA_LLM_MODEL', 'qwen2.5:7b')} — slow path (set GROQ_API_KEY for ~10x speedup)"
-        )
+    print(f"LLM (ingest) : {pretty}")
     print(
         f"Embeddings   : {os.environ.get('EMBED_MODEL', 'paraphrase-multilingual-MiniLM-L12-v2')}\n"
         f"Working dir  : {os.environ.get('LIGHTRAG_WORKING_DIR', './rag_storage')}\n"
@@ -66,7 +64,7 @@ async def _run() -> int:
     print(
         "Note: ingest is one-shot; rerun is safe (LightRAG dedupes by content hash).\n"
     )
-    rag = await build_rag(use_groq_llm=use_groq)
+    rag = await build_rag(provider=provider)
     started = time.time()
     try:
         await insert_documents(rag, docs)

@@ -31,9 +31,9 @@ intra knowledge base — 60+ pages, mostly Japanese with some English.
         └──┬──────────────────────────┬─────────────────┘
            │                          │
            ▼                          ▼
-    sentence-transformers         Ollama qwen2.5:7b   (queries — local, free)
-    paraphrase-multilingual       (or)
-    -MiniLM-L12-v2  (384-d)       Groq qwen3-32b      (ingest fast path*)
+    sentence-transformers         Groq qwen3-32b      (ingest, recommended)
+    paraphrase-multilingual       Gemini 2.5-flash    (queries / fallback)
+    -MiniLM-L12-v2  (384-d)       Ollama qwen2.5:7b   (local fallback)
 
         ┌───────────────────────────────────────────────┐
         │ rag_storage/   (regenerable, gitignored)      │
@@ -43,9 +43,9 @@ intra knowledge base — 60+ pages, mostly Japanese with some English.
         └───────────────────────────────────────────────┘
 ```
 
-\* Groq's free tier caps at 6K tokens-per-minute per request, which is
-**below** LightRAG's prompt size for entity extraction. So Ollama is
-the practical default for full-corpus ingest. See [LLM choices](#llm-choices).
+The graph that ships in this repo (593 entities / 269 relations) was
+built once via a one-off cached-response trick (see
+[Ingest](#ingest)). For real production rebuilds, use **Groq Dev tier**.
 
 ## Project layout
 
@@ -60,10 +60,15 @@ discordBot/
 ├── corpus/
 │   ├── README.md
 │   └── intra/               # 60 converted intra pages — the knowledge base
+├── cache/
+│   ├── claude_chunks.jsonl    # 100 chunks dumped via LightRAG's chunker
+│   └── claude_responses.json  # cached entity-extraction responses (replay source)
 ├── scripts/
 │   ├── convert_qa.py        # HTML/PDF → markdown (trafilatura + bs4 + pdftotext)
+│   ├── dump_chunks.py       # walk corpus → cache/claude_chunks.jsonl
+│   ├── claude_ingest.py     # ingest using cached responses (no API calls)
 │   ├── ingest_status.py     # snapshot for `make ingest-status`
-│   └── retry_failed.py      # cleanup + retry for stuck docs (see below)
+│   └── retry_failed.py      # cleanup + retry for stuck docs (Ollama path)
 ├── research/                # pre-build design notes (8 docs)
 ├── Q&A/                     # local-only raw HTML/PDF source (gitignored)
 ├── rag_storage/             # generated LightRAG state (gitignored)
@@ -102,12 +107,12 @@ Optional:
 - `GROQ_API_KEY` — fast ingest path (free tier limited; see below).
 - `STAFF_CHANNEL_ID` — Discord channel that gets posted to on errors / escalations.
 
-### 3. Install Ollama + pull a model
+### 3. Install Ollama + pull a model (optional, for local fallback)
 
 ```sh
 brew install ollama
 ollama serve &              # keep running in background
-ollama pull qwen2.5:7b      # ~4.7 GB, used for query answers (and ingest if no Groq key)
+ollama pull qwen2.5:7b      # ~4.7 GB, used as the local fallback LLM
 ```
 
 ### 4. Build + run
@@ -115,7 +120,8 @@ ollama pull qwen2.5:7b      # ~4.7 GB, used for query answers (and ingest if no 
 ```sh
 make install                # creates .venv, installs deps
 make convert                # only if you have raw HTML/PDF in Q&A/
-make ingest                 # build the LightRAG knowledge graph
+make ingest-replay          # replay the checked-in graph (~14s, no API)
+                            # OR  make ingest   (rebuild via Groq, ~30 min)
 make run                    # start the Discord bot
 ```
 
@@ -135,31 +141,69 @@ Replies are an embed with the answer + cited filenames + the query mode used.
 |---|---|
 | `make install` | Create `.venv`, install all requirements |
 | `make convert` | `Q&A/` (raw HTML/PDF) → `corpus/intra/` (markdown) via trafilatura |
-| `make ingest` | Build the LightRAG graph. Slow first time (entity extraction). |
+| `make ingest` | Build the LightRAG graph using whichever LLM is in `.env` (Gemini → Groq → Ollama auto-detect). Slow first time. |
+| `make ingest-replay` | Replay the checked-in `cache/claude_responses.json` to rebuild the exact shipped graph in ~14s, no API tokens spent. |
 | `make ingest-status` | Show progress, ETA, recent log lines |
 | `make ingest-tail` | `tail -f` the live ingest log |
 | `make run` | Start the Discord bot |
 | `make webui` | Launch LightRAG visualization UI on `:9621` |
 | `make clean` | Remove generated state and pycache |
 
-## LLM choices
+## Ingest
 
-LightRAG calls the LLM at two distinct phases:
+LightRAG's ingest extracts entities and relations from each chunk via an
+LLM call. For 60 docs / 100 chunks that's ~100-200 LLM round-trips with
+prompts of ~5-7K tokens each — which is the bottleneck.
 
-| Phase | Default | Why |
-|---|---|---|
-| **Ingest** (entity / relation extraction) | Ollama `qwen2.5:7b` | Free, local, no rate limits. Slow (~2–7h overnight on a Mac). |
-| **Query** (answer generation) | Ollama `qwen2.5:7b` | Free, private, ~30–90s per query on an M-series Mac. |
+Three paths to populate `rag_storage/`:
 
-Setting `GROQ_API_KEY` switches *ingest* to Groq (10× faster on paper) —
-**but** Groq's free tier caps at 6K tokens-per-minute per request, which
-is at or below the size of LightRAG's entity-extraction prompt. Most
-docs will fail with HTTP 413. Choices:
+### `make ingest-replay` (default, no API)
 
-- **Stick with Ollama for ingest** (default, what most people should do).
-- **Pay for Groq Dev tier** (~$3 one-time for the full corpus, ~30 min ingest).
+The graph that ships in this repo (`cache/claude_responses.json`,
+~163KB) was generated once by reading every chunk by hand and writing
+the entity/relation tuples in LightRAG's expected delimited format
+(`entity<|#|>name<|#|>type<|#|>desc` etc.), keyed by content hash. The
+ingest script (`scripts/claude_ingest.py`) injects a fake `llm_model_func`
+that looks up cached responses instead of calling any external API.
 
-Queries always run on local Ollama — privacy + zero per-query cost.
+For this build I produced those responses by hand-running Claude over
+the corpus inside a Claude Code session — pure time/token efficiency,
+since I was already in the loop. **For a production rebuild on fresh
+data, do NOT do this — use Groq.**
+
+```sh
+make ingest-replay  # ~14 seconds, deterministic
+```
+
+Result: 593 entities / 269 relations / 100 chunk vectors / 60 docs.
+
+### `make ingest` with Groq Dev tier (recommended for fresh corpora)
+
+The free-tier 6K TPM cap is below LightRAG's prompt size, so the free
+tier will fail. The Dev tier (~$3 one-time top-up) lifts it.
+
+```sh
+# in .env:
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=qwen/qwen3-32b
+INGEST_LLM=groq
+```
+
+Then `make ingest` — ~30 min for the full corpus.
+
+### `make ingest` with Ollama (local, slow, free)
+
+Set `INGEST_LLM=ollama` in `.env`. Runs locally on `qwen2.5:7b` (or
+similar). Plan on 5-7 hours unattended on an M-series Mac. Larger docs
+may hit timeouts; `scripts/retry_failed.py` retries those with smaller
+chunks.
+
+## Query-time LLM
+
+Queries are always single small calls (~1-2K tokens with retrieved
+context), so any of Gemini free / Groq free / Ollama work. Order of
+preference: Gemini 2.5-flash-lite (fast, free 15 RPM / 1000 RPD) →
+Groq → Ollama. Auto-detected from `.env`.
 
 ## Inspecting the knowledge graph
 
@@ -194,34 +238,39 @@ anywhere under `corpus/` (subdirs are walked) and `make ingest`.
 
 ## Troubleshooting
 
-### Ingest leaves some docs in `failed` status
+### Webui knowledge graph is empty
+
+The lightrag-server loads the graph file once at startup and doesn't
+auto-reload. After running `make ingest-replay` or `make ingest`,
+restart the webui (`kill <pid> && make webui`) so it picks up the
+populated graph.
+
+The webui uses Ollama `all-minilm` for embeddings (384-d, matches our
+storage) — not the same model as the bot uses. So similarity scores in
+the webui's "Query" tab will be off-axis. Use the webui for inspection
+only; use the Discord bot for real querying.
+
+### Ingest leaves some docs in `failed` status (Ollama path)
 
 Big multi-page docs sometimes hit `httpx.ReadTimeout` or LightRAG's
-internal worker timeout when `qwen2.5:7b` takes too long to extract
-entities from a chunk. Re-running `make ingest` doesn't retry them
-(LightRAG creates `dup-*` ghost entries instead). Use the surgical
-retry helper:
+internal worker timeout when local `qwen2.5:7b` takes too long. Re-running
+`make ingest` doesn't retry them — LightRAG creates `dup-*` ghost entries.
+Use the surgical retry helper:
 
 ```sh
 .venv/bin/python scripts/retry_failed.py
 ```
 
-It cleans `dup-*` noise from `kv_store_doc_status.json`, flips
-`failed`-status entries back to `pending`, and re-runs the proper
-LightRAG retry pipeline (`apipeline_process_enqueue_documents`) with
-smaller chunks (600 tokens) and bumped timeouts (900s).
-
-If the same docs still fail after that, the realistic options are
-(a) accept the partial graph and ship, (b) clean re-ingest from scratch
-with `make clean && make ingest`, or (c) pay for Groq Dev tier and
-re-ingest fast.
+It cleans `dup-*` entries, flips `failed` → `pending`, and re-runs the
+proper LightRAG retry pipeline with smaller chunks (600 tokens) and
+bumped timeouts (900s).
 
 ### Query latency is high (60–200s)
 
 That's local Ollama doing real work for every `/ask`. Discord lets
 you wait up to 15 min on a deferred reply, so it works — but it's not
-snappy. If you want sub-second queries, swap the query LLM to Groq
-(loses privacy) or upgrade hardware.
+snappy. Add a `GEMINI_API_KEY` or `GROQ_API_KEY` to `.env` and queries
+drop to ~3-5 seconds.
 
 ### Slash commands don't show up
 

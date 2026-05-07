@@ -44,6 +44,8 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_OLLAMA_LLM = "qwen2.5:7b"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GROQ_BASE = "https://api.groq.com/openai/v1"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBED_DIM = 384
 DEFAULT_QUERY_MODE = "mix"
@@ -89,18 +91,15 @@ def _ollama_llm_kwargs() -> dict[str, Any]:
     }
 
 
-def _groq_llm_func():
-    """Return an LightRAG-compatible llm_model_func that calls Groq via the
-    OpenAI-compatible endpoint. Pre-binds model + base_url + api_key."""
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError(
-            "GROQ_API_KEY is empty but Groq LLM was requested. "
-            "Set GROQ_API_KEY in .env or pass use_groq_llm=False."
-        )
-    model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
-    base_url = os.environ.get("GROQ_BASE_URL", DEFAULT_GROQ_BASE)
-
+def _make_openai_compatible_func(
+    name: str,
+    api_key: str,
+    model: str,
+    base_url: str,
+):
+    """Build a LightRAG-compatible llm_model_func that talks to any
+    OpenAI-compatible endpoint (Groq, Gemini's compat layer, OpenAI
+    proper, OpenRouter, etc.)."""
     async def _func(prompt, system_prompt=None, history_messages=None, **kwargs):
         return await openai_complete_if_cache(
             model,
@@ -112,18 +111,51 @@ def _groq_llm_func():
             **{k: v for k, v in kwargs.items() if k != "hashing_kv"},
         )
 
-    _func.__name__ = "groq_complete"  # LightRAG inspects this
-    return _func, model
+    _func.__name__ = name  # LightRAG inspects this for cache keys
+    return _func
+
+
+def _groq_llm_func():
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is empty but Groq was requested.")
+    model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    base_url = os.environ.get("GROQ_BASE_URL", DEFAULT_GROQ_BASE)
+    return _make_openai_compatible_func("groq_complete", api_key, model, base_url), model
+
+
+def _gemini_llm_func():
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is empty but Gemini was requested.")
+    model = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    base_url = os.environ.get("GEMINI_BASE_URL", DEFAULT_GEMINI_BASE)
+    return _make_openai_compatible_func("gemini_complete", api_key, model, base_url), model
+
+
+def detect_llm_provider() -> str:
+    """Pick the LLM provider based on env, in priority order:
+       gemini → groq → ollama. Override with INGEST_LLM=ollama|groq|gemini."""
+    forced = os.environ.get("INGEST_LLM", "auto").strip().lower()
+    if forced in {"ollama", "groq", "gemini"}:
+        return forced
+    if os.environ.get("GEMINI_API_KEY", "").strip():
+        return "gemini"
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return "groq"
+    return "ollama"
 
 
 async def build_rag(
     working_dir: str | None = None,
-    use_groq_llm: bool = False,
+    provider: str | None = None,
 ) -> LightRAG:
     """Construct a LightRAG instance.
 
-    use_groq_llm=True routes the LLM to Groq (fast, free tier, OpenAI-compatible).
-    Default is local Ollama. Embeddings always come from sentence-transformers.
+    The LLM provider is auto-detected from environment:
+      gemini → groq → ollama  (first one with creds wins)
+    Override by passing `provider=` explicitly or setting INGEST_LLM=...
+    Embeddings always come from sentence-transformers.
 
     Loads existing storage if working_dir is already populated.
     """
@@ -131,9 +163,18 @@ async def build_rag(
     wd = working_dir or os.environ.get("LIGHTRAG_WORKING_DIR", DEFAULT_WORKING_DIR)
     Path(wd).mkdir(parents=True, exist_ok=True)
 
-    if use_groq_llm:
-        llm_func, llm_model_name = _groq_llm_func()
+    provider = (provider or detect_llm_provider()).lower()
+
+    if provider == "gemini":
+        llm_func, llm_model_name = _gemini_llm_func()
         llm_kwargs: dict[str, Any] = {
+            "timeout": float(os.environ.get("GEMINI_TIMEOUT", "120")),
+        }
+        # Free tier is 15 RPM; concurrency 1 keeps us safely below.
+        max_async = int(os.environ.get("GEMINI_MAX_ASYNC", "1"))
+    elif provider == "groq":
+        llm_func, llm_model_name = _groq_llm_func()
+        llm_kwargs = {
             "timeout": float(os.environ.get("GROQ_TIMEOUT", "60")),
         }
         max_async = int(os.environ.get("GROQ_MAX_ASYNC", "8"))
@@ -153,6 +194,7 @@ async def build_rag(
         chunk_token_size=int(os.environ.get("CHUNK_TOKEN_SIZE", "1200")),
         chunk_overlap_token_size=int(os.environ.get("CHUNK_OVERLAP", "100")),
         enable_llm_cache=True,
+        default_llm_timeout=int(os.environ.get("LLM_TIMEOUT_SEC", "600")),
     )
     await rag.initialize_storages()
     await initialize_pipeline_status()
