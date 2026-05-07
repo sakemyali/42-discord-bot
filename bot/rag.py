@@ -59,6 +59,15 @@ class RagAnswer:
     mode: str
 
 
+class QueryFailed(RuntimeError):
+    """Raised when the query-time LLM returns nothing usable.
+
+    Most common cause is rate-limit/quota exhaustion on the configured provider
+    (Gemini free tier is 20 RPD per model). Caller should surface a useful
+    message to the user, not coerce None into the string "None".
+    """
+
+
 def _build_embedding_func(model_name: str | None = None) -> EmbeddingFunc:
     name = model_name or os.environ.get("EMBED_MODEL", DEFAULT_EMBED_MODEL)
     model = SentenceTransformer(name)
@@ -249,9 +258,17 @@ async def query(
         include_references=True,
         response_type="Conversational, friendly, 3-6 sentences",
     )
-    text = await rag.aquery(question, param=param)
+    try:
+        text = await rag.aquery(question, param=param)
+    except Exception as exc:  # network / rate-limit / auth — bubble up cleanly
+        raise QueryFailed(f"LLM call failed: {type(exc).__name__}: {exc}") from exc
+    if text is None or (isinstance(text, str) and not text.strip()):
+        raise QueryFailed(
+            "LLM returned no answer — most likely rate-limit / quota "
+            "exhaustion on the configured provider. Try again later or "
+            "set INGEST_LLM=ollama in .env to switch to the local fallback."
+        )
     if not isinstance(text, str):
-        # mode 'stream' or unexpected return; coerce
         text = str(text)
     sources = _extract_sources(text)
     body = strip_references_block(text).strip()

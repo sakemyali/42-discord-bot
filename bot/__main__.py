@@ -18,7 +18,10 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from .rag import RagAnswer, build_rag, query, working_dir_path
+from .rag import QueryFailed, RagAnswer, build_rag, query, working_dir_path
+
+# Discord message hard cap is 2000 chars. We trim with a tail "..." marker.
+_DISCORD_MSG_CAP = 1900
 
 logger = logging.getLogger("bot")
 
@@ -50,42 +53,26 @@ def _greeting_reply(asker_name: str) -> str:
     )
 
 
-def _build_answer_embed(question: str, ans: RagAnswer) -> discord.Embed:
-    body = ans.text
-    # Discord embed body cap is 4096; keep some headroom for refs section
-    if len(body) > 3500:
-        body = body[:3500].rstrip() + "..."
-    embed = discord.Embed(
-        title="Answer",
-        description=body,
-        color=discord.Color.green(),
-    )
-    embed.add_field(name="Question", value=question[:1024], inline=False)
+def _format_answer(ans: RagAnswer) -> str:
+    """Plain-text reply: answer body, then a sources line."""
+    body = ans.text.strip()
+    parts = [body] if body else []
     if ans.sources:
-        sources = ", ".join(ans.sources[:8])
-        if len(sources) > 1024:
-            sources = sources[:1021] + "..."
-        embed.add_field(name="Sources", value=sources, inline=False)
-    embed.set_footer(text=f"mode: {ans.mode}")
-    return embed
+        srcs = ", ".join(ans.sources[:8])
+        parts.append(f"\n_Sources: {srcs}_")
+    msg = "\n".join(parts) if parts else "No answer."
+    if len(msg) > _DISCORD_MSG_CAP:
+        msg = msg[:_DISCORD_MSG_CAP].rstrip() + "..."
+    return msg
 
 
-def _build_error_embed(question: str, err: str) -> discord.Embed:
-    embed = discord.Embed(
-        title="Could not answer",
-        description="Something went wrong on our side. The staff have been notified.",
-        color=discord.Color.red(),
-    )
-    embed.add_field(name="Question", value=question[:1024], inline=False)
-    embed.add_field(name="Error", value=f"```{err[:500]}```", inline=False)
-    return embed
-
-
-def _build_greeting_embed(asker_name: str) -> discord.Embed:
-    return discord.Embed(
-        title="Hi!",
-        description=_greeting_reply(asker_name),
-        color=discord.Color.blurple(),
+def _format_error(err: str) -> str:
+    """Plain-text error reply. Friendlier than a stack trace."""
+    return (
+        "Sorry, I couldn't answer that just now — the language model is "
+        "rate-limited or unreachable. Please try again in a few minutes, "
+        "or ask a staff member directly.\n"
+        f"_Detail: {err[:300]}_"
     )
 
 
@@ -149,19 +136,21 @@ def build_client() -> AskBot:
         # Greetings + tiny inputs bypass RAG entirely
         if _is_greeting(question):
             await interaction.response.send_message(
-                embed=_build_greeting_embed(interaction.user.display_name)
+                _greeting_reply(interaction.user.display_name)
             )
             return
         await interaction.response.defer(thinking=True)
         try:
             ans = await query(client.rag, question)
-            await interaction.followup.send(embed=_build_answer_embed(question, ans))
-        except Exception as exc:
-            logger.exception("query failed")
+            await interaction.followup.send(_format_answer(ans))
+        except QueryFailed as exc:
+            logger.warning("query failed (LLM): %s", exc)
             await client.post_to_staff(question, interaction.user)
-            await interaction.followup.send(
-                embed=_build_error_embed(question, str(exc))
-            )
+            await interaction.followup.send(_format_error(str(exc)))
+        except Exception as exc:
+            logger.exception("query failed (unexpected)")
+            await client.post_to_staff(question, interaction.user)
+            await interaction.followup.send(_format_error(str(exc)))
 
     return client
 
