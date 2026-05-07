@@ -29,16 +29,20 @@ run:
 # Launch the LightRAG web UI for inspecting the knowledge graph + docs.
 # Default port: 9621. Open http://localhost:9621 in a browser.
 #
-# Embedding dim must match the storage. The bot uses sentence-transformers
-# paraphrase-multilingual-MiniLM-L12-v2 (384-d). lightrag-server doesn't
-# support sentence-transformers as a binding, so we point it at Ollama's
-# all-minilm (also 384-d) — same dim, different model. Effect: the dim
-# check passes and the webui starts; graph viz + doc list work fine.
-# The webui's "Query" tab will produce off-axis results since the embedder
-# differs — use the Discord bot for real answers, the webui for inspection.
+# The embedder/LLM bindings here are stored as config but only invoked when
+# you click the webui's "Query" tab (which is documented broken below).
+# Graph viz, doc browser, and /health all work without any backend running —
+# the storage is read straight from disk. So Ollama doesn't have to be up
+# for the webui to be useful.
+#
+# Embedding dim must match the on-disk storage. The bot ingests with
+# sentence-transformers paraphrase-multilingual-MiniLM-L12-v2 (384-d), and
+# lightrag-server doesn't support sentence-transformers as a binding — so we
+# nominally point it at Ollama's all-minilm (also 384-d) just to satisfy the
+# dim check at startup. The webui's "Query" tab will produce off-axis results
+# since the embedder differs at query time — use the Discord bot for real
+# answers, the webui for inspection only.
 webui:
-	@command -v ollama >/dev/null && ollama list 2>/dev/null | grep -q "all-minilm" \
-		|| (echo "==> pulling all-minilm (384-d, ~46MB)..." && ollama pull all-minilm)
 	. .venv/bin/activate && \
 		EMBEDDING_BINDING=ollama \
 		EMBEDDING_MODEL=all-minilm \

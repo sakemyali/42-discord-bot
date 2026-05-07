@@ -11,6 +11,7 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
+cache/
 
 # LightRAG persisted state (regenerable via `make ingest`)
 rag_storage/
