@@ -144,8 +144,9 @@ def _gemini_llm_func():
 
 def detect_llm_provider() -> str:
     """Pick the LLM provider based on env, in priority order:
-       gemini → groq → ollama. Override with INGEST_LLM=ollama|groq|gemini."""
-    forced = os.environ.get("INGEST_LLM", "auto").strip().lower()
+       gemini → groq → ollama. Override with LLM_PROVIDER=ollama|groq|gemini.
+       Same selection drives both ingest and query."""
+    forced = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
     if forced in {"ollama", "groq", "gemini"}:
         return forced
     if os.environ.get("GEMINI_API_KEY", "").strip():
@@ -163,7 +164,7 @@ async def build_rag(
 
     The LLM provider is auto-detected from environment:
       gemini → groq → ollama  (first one with creds wins)
-    Override by passing `provider=` explicitly or setting INGEST_LLM=...
+    Override by passing `provider=` explicitly or setting LLM_PROVIDER=...
     Embeddings always come from sentence-transformers.
 
     Loads existing storage if working_dir is already populated.
@@ -266,7 +267,7 @@ async def query(
         raise QueryFailed(
             "LLM returned no answer — most likely rate-limit / quota "
             "exhaustion on the configured provider. Try again later or "
-            "set INGEST_LLM=ollama in .env to switch to the local fallback."
+            "set LLM_PROVIDER=ollama in .env to switch to the local fallback."
         )
     if not isinstance(text, str):
         text = str(text)

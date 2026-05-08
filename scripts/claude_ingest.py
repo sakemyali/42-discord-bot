@@ -31,8 +31,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Force the build_rag path to use our injected llm_func by setting INGEST_LLM
-# to a placeholder we then override post-build.
+# Force the build_rag path to use our injected llm_func by setting
+# LLM_PROVIDER to a placeholder we then override post-build.
 from bot.rag import build_rag, default_corpus_path  # noqa: E402
 
 WD = Path(os.environ.get("LIGHTRAG_WORKING_DIR", "./rag_storage"))
@@ -128,7 +128,7 @@ async def _run() -> int:
     print(f"corpus: {len(docs)} docs")
     # Build with any provider — we'll override the llm_model_func.
     # Use ollama mode so we don't trigger real Gemini/Groq wiring.
-    os.environ["INGEST_LLM"] = "ollama"
+    os.environ["LLM_PROVIDER"] = "ollama"
     rag = await build_rag(provider="ollama")
     rag.llm_model_func = make_claude_llm_func(cache)
     started = time.time()

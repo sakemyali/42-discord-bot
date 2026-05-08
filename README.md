@@ -186,14 +186,14 @@ tier will fail. The Dev tier (~$3 one-time top-up) lifts it.
 # in .env:
 GROQ_API_KEY=gsk_...
 GROQ_MODEL=qwen/qwen3-32b
-INGEST_LLM=groq
+LLM_PROVIDER=groq
 ```
 
 Then `make ingest` — ~30 min for the full corpus.
 
 ### `make ingest` with Ollama (local, slow, free)
 
-Set `INGEST_LLM=ollama` in `.env`. Runs locally on `qwen2.5:7b` (or
+Set `LLM_PROVIDER=ollama` in `.env`. Runs locally on `qwen2.5:7b` (or
 similar). Plan on 5-7 hours unattended on an M-series Mac. Larger docs
 may hit timeouts; `scripts/retry_failed.py` retries those with smaller
 chunks.
