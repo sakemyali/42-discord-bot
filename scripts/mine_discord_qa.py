@@ -137,10 +137,52 @@ DROP_BUCKETS = {"project-DROP"}
 # Manual skip-list for cross-thread drift cases that survive the automatic
 # filters. Each entry is the generated filename. Keeping a list here means
 # re-runs reproduce the curated state.
+#
+# Discovered via lexical-overlap audit (kanji-2+ tokens, Q≥4 / A≥3, zero
+# overlap) followed by manual confirmation. The auto filter has too many
+# false positives to apply directly (paraphrased on-topic answers), so we
+# carry the verified drifts as a static list.
 MANUAL_SKIP = {
     # KIRIN internship BH question; staff answer is about T-shirt color
-    # (batch-reply bleed)
     "2024-12-09-internship-blackhole.md",
+    # BH表記 Q → review item header A
+    "2022-02-18-blackhole-peer-review.md",
+    # Go piscine 07 ex00 newline Q → "review period over" A
+    "2022-05-19-peer-review-piscine-2.md",
+    # AlCu allowed-functions Q → match-condition change A
+    "2022-07-04-peer-review-review-flag.md",
+    # Tokyo visit / 学生証 Q → React framework debate A
+    "2022-11-01-intra-card-cluster.md",
+    # Lost eval points Q → "Rush channel added" A
+    "2022-11-29-peer-review.md",
+    # Slack global-random forwarding Q → norminette version A
+    "2022-11-30-peer-review-norminette.md",
+    # Achievement counter Q → channel-redirect A (no actual answer)
+    "2022-12-15-intra.md",
+    # mochyuwo forgets card Q → staff sends to "satushi" (different person) A
+    "2022-12-29-intra-card-cluster.md",
+    # miniRT window-resolution review Q → "Blackhole delay付与" A
+    "2023-01-31-peer-review.md",
+    # orientation-vector validation Q → "look for signs" A
+    "2023-02-06-peer-review-cluster.md",
+    # CPP09 deadline Q → scale-bug investigation A
+    "2023-03-27-bug-report.md",
+    # Shopaholic achievement Q → October exam schedule A (Copilot caught)
+    "2023-09-29-intra-achievement-shopaholic.md",
+    # mashoさん missing-review Q → "find someone for cub3d" A
+    "2023-12-01-peer-review.md",
+    # Forgot 入館証 Q → Discord outage explanation A
+    "2023-12-16-discord-discord.md",
+    # Power-outlet Q → "email transfer issue" A
+    "2024-04-15-cluster.md",
+    # DNS recovery / git access Q → leak-flag judgment A
+    "2024-06-21-review-flag-guacamole.md",
+    # GNL deep-thought email Q → review-level setting A
+    "2025-01-12-peer-review-score.md",
+    # Card-return after BH Q → "toilet/bookshelf usage" A
+    "2025-08-05-cluster-blackhole.md",
+    # Global Slack status Q → "React not allowed" A
+    "2025-09-09-slack.md",
 }
 
 # PII detectors — drop a message entirely if it surfaces personal identity.
@@ -652,10 +694,9 @@ def main():
             drops[meta["drop_reason"]] += 1
             skipped_pii += 1
             continue
-        if filename in MANUAL_SKIP:
-            drops["manual skip-list"] += 1
-            continue
-        # Avoid filename collision (multiple Qs same day, same slug)
+        # Avoid filename collision (multiple Qs same day, same slug). Must
+        # run BEFORE the manual-skip check — otherwise a skip-list entry on
+        # the colliding base filename silently nukes both Qs.
         n = 2
         base = filename
         while filename in used_filenames:
@@ -663,6 +704,9 @@ def main():
             filename = f"{stem}-{n}.md"
             n += 1
         used_filenames.add(filename)
+        if filename in MANUAL_SKIP:
+            drops["manual skip-list"] += 1
+            continue
         meta["filename"] = filename
         metas.append((slug, label, meta, body))
         bucket_counts[label] += 1
