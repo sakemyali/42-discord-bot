@@ -1,7 +1,7 @@
 # 現在Road-to-Mercari-Gopher-Dojo-00のチャンネルが存在していませんが、Road-to-Mercari-Gopher-Dojo-01に
 
 **Source**: 42 Tokyo Discord, 2026-05-06  
-**Tags**: discord
+**Tags**: road-to
 
 ## Q
 

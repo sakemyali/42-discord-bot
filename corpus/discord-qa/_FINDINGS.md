@@ -14,7 +14,7 @@ Staff verification used three independent signals: (1) staff-style language freq
 
 ## Topic index
 
-### ピアレビュー / レビュー (63 docs)
+### ピアレビュー / レビュー (60 docs)
 What it answers: edge cases in flag selection, dispute resolution, repeated-reviewer handling, point/score corrections, defense logistics.
 
 - [スロットを開けたところ、同じ方のレビューが続けて入りました。](2022-01-19-peer-review.md)
@@ -32,7 +32,7 @@ What it answers: 校舎 use during AGU, BH-extension semantics, level-up vs proj
 
 Status: extends `corpus/intra/15.md` (BlackHole) and AGU/Freeze rules; many of these are *new* edge cases not in the static corpus.
 
-### Exam / 試験 (30 docs)
+### Exam / 試験 (29 docs)
 What it answers: which attempt counts toward XP, retake mechanics, exam-mode subjects, .cpp auto-grader behaviour.
 
 - [lsblkコマンドでパーティションの状態を確認したのですが](2022-02-01-peer-review-exam.md)
@@ -41,7 +41,7 @@ What it answers: which attempt counts toward XP, retake mechanics, exam-mode sub
 
 Status: clarifies `corpus/intra/Intra Meta 試験規則.md`.
 
-### Discord ルール (6 docs)
+### Discord ルール (5 docs)
 What it answers: where to post bug reports, who to mention, escalation patterns.
 
 - [これは、あくまで予想なので合ってるかどうかはわかりませんが、dmmが土日祝休みだから厳しいんじゃないですかね？](2022-11-14-dmm.md)
@@ -120,12 +120,12 @@ What it answers: operational follow-ups for individual cases.
 
 Status: *new* operational detail.
 
-### Reloaded / Road to (4 docs)
+### Reloaded / Road to (9 docs)
 What it answers: Reloaded-specific clarifications and Road-to-X programs.
 
+- [Road-to-Mercari-Gopher-Dojo-01 をsuccessして、](2022-05-05-registration.md)
+- [1. 「ステータス投稿APIの実装」の「Functionality Check」において、mysqlコンテナの中で、mysqlにてクエリを実…](2022-05-11-peer-review-review-flag.md)
 - [Road to Mercari module 02 の問題文( についてですが,](2022-05-15-peer-review.md)
-- [road to mercariでgoのバージョン1.16の指定はなくして最新版にした方がいいと思うのですが、いかがでしょうか？](2022-09-15-road-mercari-road-to-mercari.md)
-- [road to のレビューマッチング条件について、ご対応を検討頂けると幸いです。](2023-11-01-peer-review-matchmaking.md)
 
 Status: *new* operational detail.
 
@@ -138,15 +138,15 @@ Status: *new* operational detail.
 
 ## Skipped
 
-- 433 — bucket: unbucketed
-- 222 — no staff answer
+- 430 — bucket: unbucketed
+- 223 — no staff answer
 - 42 — answer too short
 - 28 — bucket: project (drop)
 - 25 — all answers are holding-pattern
 - 20 — manual skip-list
 - 10 — drift: answer references specific time slot
+- 6 — pii: question
 - 5 — PII in all staff answers
-- 4 — pii: question
 - 2 — drift: answer references @kkohki (≠asker @kouki485)
 - 1 — filler-only answer
 - 1 — drift: project mismatch (Q=['term3d'] A=['cpp04'])

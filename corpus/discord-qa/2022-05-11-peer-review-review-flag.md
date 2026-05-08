@@ -1,7 +1,7 @@
 # 1. 「ステータス投稿APIの実装」の「Functionality Check」において、mysqlコンテナの中で、mysqlにてクエリを実行する指示があります
 
 **Source**: 42 Tokyo Discord, 2022-05-11  
-**Tags**: peer-review, evaluation
+**Tags**: road-to
 
 ## Q
 

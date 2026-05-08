@@ -1,7 +1,7 @@
 # Road-to-Mercari-Gopher-Dojo-03のレビューで、
 
 **Source**: 42 Tokyo Discord, 2023-03-09  
-**Tags**: peer-review, evaluation
+**Tags**: road-to
 
 ## Q
 
