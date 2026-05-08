@@ -1,4 +1,4 @@
-# 質問
+# です。学生証を忘れてしまったので臨時の入館証を発行いただけますでしょうか？
 
 **Source**: 42 Tokyo Discord, 2024-01-25  
 **Tags**: cluster, campus

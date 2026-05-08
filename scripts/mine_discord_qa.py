@@ -522,16 +522,27 @@ def thread_to_markdown(thread: list[dict], slug: str, label: str,
         "確認しました", "了解", "承知",
     )
     title = "質問"
+    fallback_title = None
     for ln in qclean.splitlines():
         ln = ln.strip().lstrip("> ").strip()
         if not ln:
             continue
-        if any(ln.startswith(g) for g in GENERIC_OPENERS):
+        matched_opener = next(
+            (g for g in GENERIC_OPENERS if ln.startswith(g)), None,
+        )
+        if matched_opener:
+            # Strip opener (and any trailing punctuation), use rest if substantive
+            rest = ln[len(matched_opener):]
+            rest = rest.lstrip(" 　、。!！？?：:")
+            if len(rest) >= 12:
+                fallback_title = rest[:80]
             continue
         if len(ln) < 8:
             continue
         title = ln[:80]
         break
+    if title == "質問" and fallback_title:
+        title = fallback_title
 
     date = q["_dt"].strftime("%Y-%m-%d")
     fname_slug = slug_topic(q["Content"] + " " + answer_chunks[0][1])

@@ -1,4 +1,4 @@
-# 質問
+# BHで退学になってしまった場合、入館証はどのように返却すればよろしいでしょうか？
 
 **Source**: 42 Tokyo Discord, 2022-04-11  
 **Tags**: cluster, campus

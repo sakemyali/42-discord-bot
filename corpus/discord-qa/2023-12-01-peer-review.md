@@ -1,4 +1,4 @@
-# 質問
+# 上記の件ですが、mashoさんにDMをした後、オンラインで10分待ったのですが現れなかったためmissingとしました。mashoさんはオンラインレビューの存在
 
 **Source**: 42 Tokyo Discord, 2023-12-01  
 **Tags**: peer-review, evaluation

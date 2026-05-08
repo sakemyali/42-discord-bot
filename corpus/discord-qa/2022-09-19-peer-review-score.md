@@ -1,4 +1,4 @@
-# 質問
+# normアップデート以前にget_next_line課題を提出し、本日3回目のレビューが終わったところ、アップデートによって機械採点でnormエラーが出てしまい
 
 **Source**: 42 Tokyo Discord, 2022-09-19  
 **Tags**: peer-review, evaluation

@@ -1,4 +1,4 @@
-# 質問
+# 本日学生証を忘れてしまったのですが入館証を発行していただくことできますか？
 
 **Source**: 42 Tokyo Discord, 2023-04-19  
 **Tags**: cluster, campus

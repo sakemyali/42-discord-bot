@@ -26,7 +26,7 @@ Status: clarifies `corpus/intra/Intra Meta ピアレビューについて.md`, `
 ### BlackHole / Freeze / AGU (21 docs)
 What it answers: 校舎 use during AGU, BH-extension semantics, level-up vs project-clear gating, AGU↔Freeze interaction.
 
-- [質問](2022-01-15-agu-cluster.md)
+- [メンション失礼致します。AGUの取得期間中の校舎利用に関する認識についてお伺いしたいです。「できるもの」「できるがすべきでないもの」「できな…](2022-01-15-agu-cluster.md)
 - [Lvが高い方でIntraのBHの表記がなくなってるのは、ファーストサークルをクリアしたのでしょうか？](2022-02-18-blackhole-peer-review.md)
 - [TIG日付を設定したら、](2023-01-18-agu.md)
 
@@ -114,7 +114,7 @@ Status: extends `corpus/intra/Intra Meta 退学の申請方法.md`.
 ### Bocal / Pedago / Staff (3 docs)
 What it answers: operational follow-ups for individual cases.
 
-- [質問](2024-05-25-bocal.md)
+- [Is there any staff today? We are waiting in front of bocal to get the …](2024-05-25-bocal.md)
 - [トラセンを旧過程にて進めています。レビューにおいては、ボーカルに旧課程使用の故、事前連絡が必要とのことですが、以下の点を質問させてください。](2025-05-22-peer-review-matchmaking.md)
 - [1. とらせんの場合、チームが５名と日程調整の難易度が上がっており、かつ、社会人もメンバーにいるために、対面レビューはボーカルの閉まる週末と…](2025-05-22-peer-review-cluster.md)
 
