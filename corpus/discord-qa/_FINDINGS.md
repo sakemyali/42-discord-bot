@@ -1,6 +1,6 @@
 # Discord Q&A — extraction findings
 
-Source: `Q&A/Discord_chat_*.csv` (5342 rows, 1051 question rows, 270 accepted)  
+Source: `Q&A/Discord_chat_*.csv` (5342 rows, 1051 question rows, 251 accepted)  
 Date range: 2022-01-02 → 2026-05-08  
 Verified staff handles: @2destiny, @42staff_01, @alex42net, @footanaka_42staff, @kitamura_shoko, @naganoyu9442, @nop9039, @nop9166, @sataharu, @shotakaki_43114, @tg_lazuli
 
@@ -8,13 +8,13 @@ Staff verification used three independent signals: (1) staff-style language freq
 
 ## Summary
 
-- 270 markdown files written under `corpus/discord-qa/`
+- 251 markdown files written under `corpus/discord-qa/`
 - Filtering criteria: question must fall in a KEEP bucket, answer must come from verified staff (Mentions-the-asker up to 72h later, OR within 90min of the question), and the answer must be substantive (not just "確認中です").
 - Bucket-level summary below; raw drop counters at end.
 
 ## Topic index
 
-### ピアレビュー / レビュー (69 docs)
+### ピアレビュー / レビュー (63 docs)
 What it answers: edge cases in flag selection, dispute resolution, repeated-reviewer handling, point/score corrections, defense logistics.
 
 - [スロットを開けたところ、同じ方のレビューが続けて入りました。](2022-01-19-peer-review.md)
@@ -23,16 +23,16 @@ What it answers: edge cases in flag selection, dispute resolution, repeated-revi
 
 Status: clarifies `corpus/intra/Intra Meta ピアレビューについて.md`, `corpus/intra/Intra Meta 【レビューキャンペーン】ルーブリック.md`, `corpus/intra/the_art_of_peer_evaluation.en.md`.
 
-### BlackHole / Freeze / AGU (21 docs)
+### BlackHole / Freeze / AGU (20 docs)
 What it answers: 校舎 use during AGU, BH-extension semantics, level-up vs project-clear gating, AGU↔Freeze interaction.
 
 - [メンション失礼致します。AGUの取得期間中の校舎利用に関する認識についてお伺いしたいです。「できるもの」「できるがすべきでないもの」「できな…](2022-01-15-agu-cluster.md)
-- [Lvが高い方でIntraのBHの表記がなくなってるのは、ファーストサークルをクリアしたのでしょうか？](2022-02-18-blackhole-peer-review.md)
 - [TIG日付を設定したら、](2023-01-18-agu.md)
+- [give upからのretryで新規のリポジトリつくってもだめですか？](2023-02-21-blackhole.md)
 
 Status: extends `corpus/intra/15.md` (BlackHole) and AGU/Freeze rules; many of these are *new* edge cases not in the static corpus.
 
-### Exam / 試験 (31 docs)
+### Exam / 試験 (30 docs)
 What it answers: which attempt counts toward XP, retake mechanics, exam-mode subjects, .cpp auto-grader behaviour.
 
 - [lsblkコマンドでパーティションの状態を確認したのですが](2022-02-01-peer-review-exam.md)
@@ -50,7 +50,7 @@ What it answers: where to post bug reports, who to mention, escalation patterns.
 
 Status: extends `corpus/intra/42 Tokyo Discordの利用ポリシー.md`.
 
-### Piscine (26 docs)
+### Piscine (24 docs)
 What it answers: C↔Go Piscine differences, 42cursus transition, achievement bonuses.
 
 - [校舎にいるのですが、ピシン生がスピーカーをオンにするのはtigではないのでしょうか？](2022-02-18-piscine-cluster.md)
@@ -77,7 +77,7 @@ What it answers: registration conflicts (libft vs libft-0X), curriculum state ma
 
 Status: operational *new* detail on registration and course state machine.
 
-### Cluster / iMac / 校舎 (83 docs)
+### Cluster / iMac / 校舎 (78 docs)
 What it answers: 学生証 issuance, building access, iMac assignment.
 
 - [本日学生証受け取り予定でしたが電車遅延のため申し訳ないのですが間に合いません](2022-01-18-intra-card.md)
@@ -86,7 +86,7 @@ What it answers: 学生証 issuance, building access, iMac assignment.
 
 Status: extends campus-rule notes (`corpus/intra/Intra Meta キャンパス全体ルール.md`, etc.).
 
-### Intra / Intranet (8 docs)
+### Intra / Intranet (7 docs)
 What it answers: intranet UI/state quirks, vogsphere git semantics, password rules.
 
 - [先日購入した下記アイテムが反映されず困っております。(フォーム回答してからある程度の日数待つ必要ありますかね？)](2022-10-29-blackhole.md)
@@ -95,7 +95,7 @@ What it answers: intranet UI/state quirks, vogsphere git semantics, password rul
 
 Status: operational fixes/clarifications around the intranet (mostly *new*).
 
-### Goinfre / Docker / Guacamole (7 docs)
+### Goinfre / Docker / Guacamole (6 docs)
 What it answers: VM disk-space, Docker engine version, Guacamole environment.
 
 - [guacamoleでレビューする際、環境変数を変更/削除してからプログラムを実行しても問題ないでしょうか？](2022-01-21-peer-review-guacamole.md)
@@ -129,12 +129,10 @@ What it answers: Reloaded-specific clarifications and Road-to-X programs.
 
 Status: *new* operational detail.
 
-### Slack / 42born2code (3 docs)
+### Slack / 42born2code (1 docs)
 What it answers: interaction with the global 42 Slack.
 
 - [42urdulizでも18時にイベントについて言及があるので、18時開催のように思います。](2022-06-13-registration-slack.md)
-- [rnakaです。](2022-11-30-peer-review-norminette.md)
-- [こちらの件のステータスを教えていただけますか？](2025-09-09-slack.md)
 
 Status: *new* operational detail.
 
@@ -145,6 +143,7 @@ Status: *new* operational detail.
 - 42 — answer too short
 - 28 — bucket: project (drop)
 - 25 — all answers are holding-pattern
+- 20 — manual skip-list
 - 10 — drift: answer references specific time slot
 - 5 — PII in all staff answers
 - 4 — pii: question
@@ -158,7 +157,6 @@ Status: *new* operational detail.
 - 1 — drift: answer references @hinakaza (≠asker @kebin_rn)
 - 1 — drift: answer references @ttsubo (≠asker @cacapon)
 - 1 — drift: answer references @tasugiya (≠asker @.cre5t)
-- 1 — manual skip-list
 
 ## Open questions for the user
 
