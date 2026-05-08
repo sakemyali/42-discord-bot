@@ -100,7 +100,9 @@ BUCKETS = [
      ["bocal", "pedago", "ペダゴ", "ボーカル", "Pedago"]),
     ("road-to",
      "Reloaded / Road to",
-     ["reloaded", "road to", "リローデ", "ロードトゥ"]),
+     ["reloaded", "road to", "road-to", "road-to-mercari", "road-to-gopher",
+      "road-to-tokyo", "リローデ", "ロードトゥ", "Road-to-Mercari",
+      "Road-to-Gopher", "Gopher-Dojo", "gopher-dojo"]),
     ("job",
      "求人 / Job",
      ["求人", " job ", "求職", "就職", "intern", "インターン"]),
@@ -186,15 +188,37 @@ MANUAL_SKIP = {
 }
 
 # PII detectors — drop a message entirely if it surfaces personal identity.
+# We err on the side of false positives (drop a doc that might be fine)
+# rather than leak a real-world name into the bot corpus.
 PII_RE = [
     re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),  # email
     re.compile(r"\b0\d{1,4}-?\d{1,4}-?\d{4}\b"),  # JP phone
     re.compile(r"\b\d{3}-?\d{4}-?\d{4}\b"),  # mobile
+    # Full-name patterns: "romaji (kanji)" — e.g. "koizumi yuya （小泉 湧也）"
+    # Allow optional space/middle dot between kanji name parts
+    re.compile(
+        r"[A-Za-z][a-z]{2,}\s+[A-Za-z][a-z]{2,}\s*"
+        r"[（(][一-龯々]{1,4}[ 　・]?[一-龯々]{1,4}[）)]"
+    ),
+    # "kanji (romaji)" — same but reversed
+    re.compile(
+        r"[一-龯々]{1,4}[ 　・]?[一-龯々]{1,4}\s*"
+        r"[（(][A-Za-z][a-z]{2,}\s+[A-Za-z][a-z]{2,}[）)]"
+    ),
 ]
 
 # Discord ID mention <@!1234567890> or <@1234567890> — strip silently
 USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
+# Discord channel mention <#1234567890> — strip silently (surrounding text
+# usually says "チャンネル" already)
+CHANNEL_MENTION_RE = re.compile(r"<#\d+>")
+# Strikethrough is Discord/markdown for retracted text — drop the wrapper
+# AND its content (the user explicitly invalidated it).
+STRIKETHROUGH_RE = re.compile(r"~~.+?~~", re.DOTALL)
+# Markdown link [text](url) — preserve the display text, drop the URL.
+# Must run BEFORE bare-URL stripping or we leave a dangling "[text]( ".
+MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:[^)]*)\)")
 URL_RE = re.compile(r"https?://\S+")
 WHITESPACE_RE = re.compile(r"[ \t]+")
 MULTILINE_RE = re.compile(r"\n{3,}")
@@ -280,6 +304,12 @@ def clean_content(text: str) -> str:
         lambda m: "(スタッフ宛)" if m.group(1) == STAFF_ROLE_ID else "",
         text,
     )
+    text = CHANNEL_MENTION_RE.sub("", text)
+    text = STRIKETHROUGH_RE.sub("", text)
+    # Replace markdown links with their display text BEFORE stripping bare
+    # URLs — otherwise URL_RE eats only the URL inside () and we're left
+    # with a malformed "[text](" hanging.
+    text = MD_LINK_RE.sub(r"\1", text)
     text = URL_RE.sub("", text)
     text = WHITESPACE_RE.sub(" ", text)
     text = MULTILINE_RE.sub("\n\n", text)
@@ -565,9 +595,14 @@ def thread_to_markdown(thread: list[dict], slug: str, label: str,
     )
     title = "質問"
     fallback_title = None
+    DIVIDER_RE = re.compile(r"^[-=・━─_*\s]+$")
     for ln in qclean.splitlines():
         ln = ln.strip().lstrip("> ").strip()
         if not ln:
+            continue
+        # Skip divider-only lines (Discord users sometimes use ---------- as
+        # a separator between sections of a long question)
+        if DIVIDER_RE.match(ln):
             continue
         matched_opener = next(
             (g for g in GENERIC_OPENERS if ln.startswith(g)), None,
