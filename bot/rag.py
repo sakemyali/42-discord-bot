@@ -254,22 +254,27 @@ async def query(
 ) -> RagAnswer:
     """Run a query end-to-end. Returns the answer plus extracted source list."""
     use_mode = mode or os.environ.get("LIGHTRAG_QUERY_MODE", DEFAULT_QUERY_MODE)
-    # include_references=True so LightRAG appends a References block we can
-    # parse for source filenames. The block is stripped from the user-facing
-    # answer body in `_extract_sources` + `strip_references_block` below, and
-    # any inline [N] markers the LLM might add are scrubbed by
-    # `_INLINE_CITATION_RE`. Net effect: clean staff-DM voice for students,
-    # source list available for the log channel.
+    # We instruct the LLM to produce two parts: a plain-prose body (staff-DM
+    # voice — no markdown) followed by a mandatory `### References` block
+    # listing the file_paths it drew from. Downstream, `strip_references_block`
+    # hides the References from the student-facing answer while
+    # `_extract_sources` parses it for the log channel embed. The
+    # `include_references` flag on QueryParam is HTTP-API-only and a no-op
+    # when calling rag.aquery() directly — the actual mechanism is the prompt.
     param = QueryParam(
         mode=use_mode,
         top_k=top_k or int(os.environ.get("LIGHTRAG_TOP_K", "20")),
         include_references=True,
         response_type=(
             "42 Tokyoの運営スタッフとして、Discordで学生に直接DMで返答するように、"
-            "丁寧だが簡潔な日本語で1〜3文だけで答えてください。"
-            "見出し、箇条書き、Markdown装飾、引用番号、URLは使わないこと。"
+            "本文は丁寧だが簡潔な日本語で1〜3文だけで書いてください。"
+            "本文では、見出し、箇条書き、Markdown装飾、引用番号、URLは使わないこと。"
+            "本文の後に必ず空行を1つ入れて、"
+            "`### References` という見出しから始まる参考文献セクションを付けてください。"
+            "セクションの中身は参照したドキュメントを `- [N] ファイル名.md` の形式で"
+            "1行ずつ、最大5件まで列挙してください。"
             "もし提供されたコンテキストに質問の答えが含まれていない場合は、"
-            "推測したり一般論で答えたりせず、必ず "
+            "本文も参考文献セクションも作らず、必ず "
             "[NO_CORPUS_ANSWER] という文字列だけを返答してください。"
         ),
     )
