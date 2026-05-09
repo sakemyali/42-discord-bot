@@ -591,7 +591,7 @@ def thread_to_markdown(thread: list[dict], slug: str, label: str,
         "いつもお世話", "お世話になっ", "Bonsoir", "bonsoir",
         "ありがとうございます", "ありがとう", "ご返答", "ご回答ありがとう",
         "返信", "Bonjour", "bonjour", "すみません", "すいません",
-        "確認しました", "了解", "承知",
+        "確認しました", "了解", "承知", "一点",
     )
     title = "質問"
     fallback_title = None
