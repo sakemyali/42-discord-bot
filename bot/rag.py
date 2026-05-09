@@ -254,15 +254,20 @@ async def query(
 ) -> RagAnswer:
     """Run a query end-to-end. Returns the answer plus extracted source list."""
     use_mode = mode or os.environ.get("LIGHTRAG_QUERY_MODE", DEFAULT_QUERY_MODE)
+    # include_references=True so LightRAG appends a References block we can
+    # parse for source filenames. The block is stripped from the user-facing
+    # answer body in `_extract_sources` + `strip_references_block` below, and
+    # any inline [N] markers the LLM might add are scrubbed by
+    # `_INLINE_CITATION_RE`. Net effect: clean staff-DM voice for students,
+    # source list available for the log channel.
     param = QueryParam(
         mode=use_mode,
         top_k=top_k or int(os.environ.get("LIGHTRAG_TOP_K", "20")),
-        include_references=False,
+        include_references=True,
         response_type=(
             "42 Tokyoの運営スタッフとして、Discordで学生に直接DMで返答するように、"
             "丁寧だが簡潔な日本語で1〜3文だけで答えてください。"
             "見出し、箇条書き、Markdown装飾、引用番号、URLは使わないこと。"
-            "「参考資料」「Sources」「References」などのセクションは絶対に追加しない。"
             "もし提供されたコンテキストに質問の答えが含まれていない場合は、"
             "推測したり一般論で答えたりせず、必ず "
             "[NO_CORPUS_ANSWER] という文字列だけを返答してください。"
