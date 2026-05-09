@@ -183,6 +183,10 @@ MANUAL_SKIP = {
     "2025-01-12-peer-review-score.md",
     # Student ID card pickup location Q → assignment typo fix A (proximity mismatch)
     "2023-02-07-intra-card.md",
+    # Entry-card pickup time Q → MLX library usage A (cross-thread drift)
+    "2024-09-03-sorry-long-wait.md",
+    # Campus address sharing Q → office hours A (proximity mismatch)
+    "2025-02-06-cluster.md",
     # Card-return after BH Q → "toilet/bookshelf usage" A
     "2025-08-05-cluster-blackhole.md",
     # Global Slack status Q → "React not allowed" A
@@ -384,7 +388,8 @@ def find_thread(rows: list[dict], q_idx: int) -> list[dict] | None:
     directed_deadline = qtime + dt.timedelta(hours=DIRECTED_WINDOW_HRS)
     proximity_deadline = qtime + dt.timedelta(minutes=PROXIMITY_FALLBACK_MIN)
 
-    # Phase 1 — locate the first staff reply.
+    # Phase 1 — locate the best staff reply.
+    # Pass 1: prefer a directed reply anywhere in the 72-hour window.
     primary_idx = None
     primary = None
     for j in range(q_idx + 1, len(rows)):
@@ -393,9 +398,25 @@ def find_thread(rows: list[dict], q_idx: int) -> list[dict] | None:
             break
         if m["Username"] not in STAFF:
             continue
-        directed = qauthor in (m.get("Mentions") or "")
-        close = m["_dt"] <= proximity_deadline
-        if directed or close:
+        if qauthor in (m.get("Mentions") or ""):
+            primary_idx = j
+            primary = m
+            break
+
+    # Pass 2: proximity fallback — only when no directed reply was found AND
+    # there are no intervening messages from other users (which would indicate
+    # the staff reply addresses a different conversation).
+    if primary is None:
+        for j in range(q_idx + 1, len(rows)):
+            m = rows[j]
+            if m["_dt"] > proximity_deadline:
+                break
+            if m["Username"] not in STAFF:
+                # Any message from a user other than the asker between Q and
+                # the candidate answer means the channel moved on; discard.
+                if m["Username"] == qauthor:
+                    continue
+                break
             primary_idx = j
             primary = m
             break
