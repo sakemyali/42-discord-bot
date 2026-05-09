@@ -149,8 +149,10 @@ Replies are an embed with the answer + cited filenames + the query mode used.
 
 ## Locating a student
 
-`/search login:emoulaya` returns the iMac the student is currently sitting at,
-plus a small map of the cluster with their seat highlighted. Powered by the
+`/search login:emoulaya` returns a small bilingual (EN / JA) card with
+the iMac the student is currently sitting at — cluster, floor (when the
+host name encodes it), row · seat — and Discord's live relative timestamp
+for how long they've been logged in. Powered by the
 [42 intra API](https://api.intra.42.fr/apidoc/2.0/locations.html) over the
 OAuth client-credentials flow.
 
@@ -166,7 +168,7 @@ Setup:
 The hostname parser handles `c1r4p5` and `e1r4p5` style names (cluster, row,
 seat). Floors are derived from the host prefix when it looks floor-ish
 (`e1` → "1F"); otherwise the floor field is omitted. If the format isn't
-recognized the embed shows the raw host and skips the map.
+recognized the embed shows the raw host instead of parsed coordinates.
 
 Without `FORTYTWO_UID` / `FORTYTWO_SECRET` set, `/search` replies with a
 friendly "not configured" ephemeral message — the rest of the bot still

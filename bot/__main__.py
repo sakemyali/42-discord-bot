@@ -7,7 +7,6 @@ on any error so users never see a stack trace.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
@@ -21,7 +20,6 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from .cluster_map import render_cluster_map
 from .forty_two import (
     ActiveLocation,
     FortyTwoClient,
@@ -104,6 +102,53 @@ def _format_answer(ans: RagAnswer) -> str:
     if len(msg) > _DISCORD_MSG_CAP:
         msg = msg[:_DISCORD_MSG_CAP].rstrip() + "..."
     return msg
+
+
+def _build_location_embed(login: str, loc: ActiveLocation) -> discord.Embed:
+    """Bilingual EN/JA card for /search. Uses Discord's <t:UNIX:R> for live duration."""
+    embed = discord.Embed(
+        title=f"📍 {login}",
+        color=discord.Color.blurple(),
+    )
+    if loc.cluster is not None:
+        embed.add_field(
+            name="🏢 Cluster / クラスター",
+            value=f"**{loc.cluster}**",
+            inline=True,
+        )
+        if loc.floor:
+            embed.add_field(
+                name="📐 Floor / 階",
+                value=f"**{loc.floor}**",
+                inline=True,
+            )
+        embed.add_field(
+            name="⌨️ Row · Seat / 列・席",
+            value=f"**R{loc.row} · P{loc.seat}**",
+            inline=True,
+        )
+    else:
+        embed.add_field(
+            name="🖥️ Host / ホスト名",
+            value=f"`{loc.host or '—'}`",
+            inline=False,
+        )
+
+    duration_value = "—"
+    if loc.begin_at:
+        try:
+            dt = datetime.fromisoformat(loc.begin_at.replace("Z", "+00:00"))
+            unix = int(dt.timestamp())
+            duration_value = f"<t:{unix}:R> · <t:{unix}:t>"
+        except ValueError:
+            duration_value = loc.begin_at
+    embed.add_field(
+        name="⏱️ Logged in / ログイン中",
+        value=duration_value,
+        inline=False,
+    )
+    embed.set_footer(text=f"host: {loc.host}" if loc.host else "")
+    return embed
 
 
 def _format_error(err: str) -> str:
@@ -590,37 +635,8 @@ def build_client() -> AskBot:
             )
             return
 
-        embed = discord.Embed(
-            title=f"📍 {login}",
-            color=discord.Color.blurple(),
-        )
-        if loc.cluster is not None:
-            seat_str = f"Cluster {loc.cluster} · Row {loc.row} · Seat {loc.seat}"
-        else:
-            seat_str = "(host format not recognized)"
-        embed.add_field(name="Seat", value=seat_str, inline=False)
-        if loc.floor:
-            embed.add_field(name="Floor", value=loc.floor, inline=True)
-        embed.add_field(name="Host", value=f"`{loc.host}`", inline=True)
-        if loc.begin_at:
-            embed.add_field(name="Logged in since", value=loc.begin_at, inline=False)
-
-        files: list[discord.File] = []
-        if loc.cluster is not None and loc.row is not None and loc.seat is not None:
-            try:
-                png = render_cluster_map(
-                    cluster=loc.cluster,
-                    row=loc.row,
-                    seat=loc.seat,
-                    floor=loc.floor,
-                )
-                file = discord.File(io.BytesIO(png), filename="cluster.png")
-                embed.set_image(url="attachment://cluster.png")
-                files.append(file)
-            except Exception:
-                logger.exception("cluster map render failed")
-
-        await interaction.followup.send(embed=embed, files=files)
+        embed = _build_location_embed(login, loc)
+        await interaction.followup.send(embed=embed)
 
         await client.post_log(
             title="🔎 Searched location",
@@ -629,7 +645,6 @@ def build_client() -> AskBot:
                 ("Searched by", interaction.user.mention),
                 ("Login", login),
                 ("Host", loc.host or "—"),
-                ("Seat", seat_str),
             ],
         )
 

@@ -7,4 +7,3 @@ lightrag-hku>=1.4
 trafilatura>=2.0
 markdownify>=1.2
 beautifulsoup4>=4.14
-pillow>=10.0
