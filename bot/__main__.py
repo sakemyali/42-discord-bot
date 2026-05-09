@@ -7,7 +7,6 @@ on any error so users never see a stack trace.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
@@ -15,13 +14,16 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
 from .rag import QueryFailed, RagAnswer, build_rag, default_corpus_path, insert_documents, query, working_dir_path
+
+if TYPE_CHECKING:
+    from lightrag import LightRAG
 
 # Discord message hard cap is 2000 chars. We trim with a tail "..." marker.
 _DISCORD_MSG_CAP = 1900
@@ -137,7 +139,7 @@ class AskBot(discord.Client):
         self.allowed_channel_ids: set[int] = {
             int(x) for x in (p.strip() for p in raw_ask_channels.split(",")) if x.isdigit()
         }
-        self.rag: object | None = None  # LightRAG instance, set in setup_hook
+        self.rag: "LightRAG | None" = None  # set in setup_hook
         self.query_counts: dict[int, int] = {}  # user_id -> queries this session
         # Keyed by staff_thread_id. In-memory only — restart drops in-flight escalations.
         self.pending_escalations: dict[int, EscalationContext] = {}
@@ -242,30 +244,53 @@ class AskBot(discord.Client):
             logger.exception("failed to post to staff")
             return None
 
-    async def on_reaction_add(
-        self, reaction: discord.Reaction, user: discord.User | discord.Member
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
     ) -> None:
-        """Resolve a staff escalation when an admin reacts ✅ in the staff thread."""
-        if user.bot:
+        """Resolve a staff escalation when an admin reacts ✅ in the staff thread.
+
+        Uses the *raw* reaction event (not on_reaction_add) so we don't depend on
+        the bot having the reacted-to message in its in-memory cache — admin
+        replies in a freshly created thread aren't always cached.
+        """
+        if self.user is not None and payload.user_id == self.user.id:
             return
-        if str(reaction.emoji) != "✅":
+        if str(payload.emoji) != "✅":
             return
-        ctx = self.pending_escalations.get(reaction.message.channel.id)
+        ctx = self.pending_escalations.get(payload.channel_id)
         if ctx is None:
             return
-        if not isinstance(user, discord.Member):
+        member = payload.member  # populated for guild reactions
+        if member is None or member.bot:
             return
         if not self.admin_role_id:
+            logger.info("✅ reaction in staff thread but ADMIN_ROLE_ID not set; ignoring")
             return
         try:
             admin_role_id = int(self.admin_role_id)
         except ValueError:
             return
-        if not any(r.id == admin_role_id for r in user.roles):
+        if not any(r.id == admin_role_id for r in member.roles):
+            logger.info(
+                "✅ reaction by %s but they lack admin role %s; ignoring",
+                member, self.admin_role_id,
+            )
+            return
+        # Fetch the reacted-to message; it may not be in the bot's cache.
+        try:
+            channel = self.get_channel(payload.channel_id) or await self.fetch_channel(
+                payload.channel_id
+            )
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                logger.warning("escalation channel %s is not text-capable", payload.channel_id)
+                return
+            answer_msg = await channel.fetch_message(payload.message_id)
+        except Exception:
+            logger.exception("could not fetch reacted message for resolution")
             return
         # Pop before resolving so a second admin reacting is a no-op.
         self.pending_escalations.pop(ctx.staff_thread_id, None)
-        await self._resolve_escalation(ctx, reaction.message, user)
+        await self._resolve_escalation(ctx, answer_msg, member)
 
     async def _resolve_escalation(
         self,
@@ -283,10 +308,13 @@ class AskBot(discord.Client):
             thread = self.get_channel(ctx.student_thread_id) or await self.fetch_channel(
                 ctx.student_thread_id
             )
-            await thread.send(
-                f"<@{ctx.asker_id}> {prefix}\n\n{answer_text}",
-                allowed_mentions=discord.AllowedMentions(users=True),
-            )
+            if isinstance(thread, (discord.Thread, discord.TextChannel)):
+                await thread.send(
+                    f"<@{ctx.asker_id}> {prefix}\n\n{answer_text}",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            else:
+                logger.warning("student thread %s is not text-capable", ctx.student_thread_id)
         except Exception:
             logger.exception("failed to forward staff answer to student thread")
 
@@ -322,7 +350,8 @@ class AskBot(discord.Client):
 
         # 3. Archive + lock the staff thread.
         try:
-            await answer_msg.channel.edit(archived=True, locked=True)
+            if isinstance(answer_msg.channel, discord.Thread):
+                await answer_msg.channel.edit(archived=True, locked=True)
         except Exception:
             logger.exception("failed to archive staff thread")
 
@@ -377,6 +406,9 @@ def build_client() -> AskBot:
             return
         await interaction.response.defer(thinking=True)
         start = time.monotonic()
+        if client.rag is None:
+            await interaction.followup.send(_format_error("RAG not initialized"))
+            return
         try:
             ans = await query(client.rag, question)
             elapsed = time.monotonic() - start
