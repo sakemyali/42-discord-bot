@@ -8,9 +8,10 @@ back to the asker *and* ingests the Q+A into the corpus so the next ask
 hits it. `/search login:<intra-name>` returns a bilingual card showing
 where any 42 student is currently sitting.
 
-Built around **LightRAG** (graph + vector retrieval) over the 42Tokyo
-intra knowledge base — 60+ pages, mostly Japanese with some English —
-plus the live 42 intra API for real-time location lookups.
+Built around **LightRAG** (graph + vector retrieval) over a 42Tokyo
+knowledge base of **300+ docs** — 60 scraped intra pages plus ~250 staff
+Q&A pairs mined from the Discord history, mostly Japanese with some
+English — plus the live 42 intra API for real-time location lookups.
 
 ![/ask in action](docs/screenshots/ask-example.png)
 
@@ -285,8 +286,9 @@ becomes a no-op. Acceptable for the demo; production would persist
 ## Ingest
 
 LightRAG's ingest extracts entities and relations from each chunk via an
-LLM call. For 60 docs / 100 chunks that's ~100-200 LLM round-trips with
-prompts of ~5-7K tokens each — which is the bottleneck.
+LLM call. For the original 60-doc intra snapshot that's ~100-200 LLM
+round-trips at ~5-7K tokens each. The full 300+ doc corpus (intra +
+discord-qa) takes proportionally longer; budget accordingly.
 
 Three paths to populate `rag_storage/`:
 
@@ -309,6 +311,9 @@ make ingest-replay  # ~14 seconds, deterministic
 ```
 
 Result: 593 entities / 269 relations / 100 chunk vectors / 60 docs.
+(Replay only covers the original intra snapshot — the discord-qa pairs
+are not in the cached responses, so to include them in the graph you
+need to run `make ingest` with a real LLM provider.)
 
 ### `make ingest` with Groq Dev tier (recommended for fresh corpora)
 
