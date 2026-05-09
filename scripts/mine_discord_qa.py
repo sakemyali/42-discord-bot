@@ -181,6 +181,8 @@ MANUAL_SKIP = {
     "2024-06-21-review-flag-guacamole.md",
     # GNL deep-thought email Q → review-level setting A
     "2025-01-12-peer-review-score.md",
+    # Student ID card pickup location Q → assignment typo fix A (proximity mismatch)
+    "2023-02-07-intra-card.md",
     # Card-return after BH Q → "toilet/bookshelf usage" A
     "2025-08-05-cluster-blackhole.md",
     # Global Slack status Q → "React not allowed" A
