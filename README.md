@@ -87,11 +87,14 @@ Local-only, not committed: `.env`, `Q&A/`, `rag_storage/`, `lightrag.log`,
 ### 1. Discord application
 
 1. <https://discord.com/developers/applications> → **New Application**.
-2. **Bot** tab → **Reset Token** → copy.
+2. **Bot** tab → **Reset Token** → copy. On the same tab, scroll down and
+   enable **Message Content Intent** (required so the bot can read the
+   staff answer it ingests back into the corpus on ✅).
 3. **OAuth2 → URL Generator**: scopes `bot` + `applications.commands`;
    permissions `View Channel`, `Send Messages`, `Embed Links`,
-   `Read Message History`. Open the generated URL, invite the bot to a
-   test server.
+   `Read Message History`, `Add Reactions`, `Create Public Threads`,
+   `Send Messages in Threads`, `Manage Threads`. Open the generated URL,
+   invite the bot to a test server.
 
 ### 2. Configure
 
@@ -106,6 +109,13 @@ Copy Server ID) so slash commands sync instantly.
 Optional:
 - `GROQ_API_KEY` — fast ingest path (free tier limited; see below).
 - `STAFF_CHANNEL_ID` — Discord channel that gets posted to on errors / escalations.
+- `ADMIN_ROLE_ID` — role pinged on escalations and required to confirm staff
+  answers via ✅ reaction (see [Staff escalation flow](#staff-escalation-flow)).
+- `BOT_LOG_CHANNEL_ID` — channel where the bot mirrors all activity (boot,
+  queries, escalations, resolutions, errors).
+- `ASK_CHANNEL_IDS` — comma-separated channel IDs where `/ask` is allowed.
+  Soft fallback only; the authoritative way to hide the command is **Server
+  Settings → Integrations → bot → /ask → Channels** (Discord UI).
 
 ### 3. Install Ollama + pull a model (optional, for local fallback)
 
@@ -134,6 +144,34 @@ In Discord:
 ```
 
 Replies are an embed with the answer + cited filenames + the query mode used.
+
+## Staff escalation flow
+
+When LightRAG returns its `[NO_CORPUS_ANSWER]` sentinel, the bot doesn't just
+forward the question to staff — it spawns a thread on each side and closes
+the loop:
+
+1. **Student thread** — spawned off the bot's "passed to staff" reply. The
+   eventual answer lands here, with the asker pinged.
+2. **Staff thread** — spawned off the staff-channel embed. The on-call admin
+   types the answer in the thread and reacts ✅ to their own message.
+3. On ✅ from a member of `ADMIN_ROLE_ID`:
+   - The answer is forwarded to the student thread (with `@asker`).
+   - A new file `corpus/discord-qa/<date>-staff-answer-<thread_id>.md` is
+     written and live-ingested into LightRAG, so the same question now
+     answers from the corpus on next ask. The on-disk markdown survives
+     future `make ingest` rebuilds via LightRAG's content-hash dedup.
+   - The staff thread is archived + locked.
+   - A 🟢 Resolved embed lands in `BOT_LOG_CHANNEL_ID`.
+
+Required for this flow: `STAFF_CHANNEL_ID`, `ADMIN_ROLE_ID`, the
+`Add Reactions` / `Create Public Threads` / `Manage Threads` bot permissions
+on both channels, and Message Content Intent in the Developer Portal.
+
+Known limitation: in-flight escalations are tracked in memory. A bot restart
+between escalation and the ✅ reaction drops the context — the reaction
+becomes a no-op. Acceptable for the demo; production would persist the
+mapping to a file.
 
 ## Make targets
 

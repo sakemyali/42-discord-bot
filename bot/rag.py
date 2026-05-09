@@ -48,7 +48,7 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_EMBED_DIM = 384
-DEFAULT_QUERY_MODE = "mix"
+DEFAULT_QUERY_MODE = "hybrid"
 DEFAULT_LLM_NUM_CTX = 16384
 
 
@@ -213,6 +213,7 @@ async def build_rag(
 
 _REF_LINE_RE = re.compile(r"^\s*[-*]\s*\[\d+\]\s*(.+?\.md)\s*$", re.MULTILINE)
 _REF_HEADER_RE = re.compile(r"###?\s*References\s*$", re.MULTILINE | re.IGNORECASE)
+_INLINE_CITATION_RE = re.compile(r"\s*\[(?:\d+\s*,\s*)*\d+\]")
 
 
 def _extract_sources(answer_text: str) -> list[str]:
@@ -256,8 +257,16 @@ async def query(
     param = QueryParam(
         mode=use_mode,
         top_k=top_k or int(os.environ.get("LIGHTRAG_TOP_K", "20")),
-        include_references=True,
-        response_type="Conversational, friendly, 3-6 sentences",
+        include_references=False,
+        response_type=(
+            "42 Tokyoの運営スタッフとして、Discordで学生に直接DMで返答するように、"
+            "丁寧だが簡潔な日本語で1〜3文だけで答えてください。"
+            "見出し、箇条書き、Markdown装飾、引用番号、URLは使わないこと。"
+            "「参考資料」「Sources」「References」などのセクションは絶対に追加しない。"
+            "もし提供されたコンテキストに質問の答えが含まれていない場合は、"
+            "推測したり一般論で答えたりせず、必ず "
+            "[NO_CORPUS_ANSWER] という文字列だけを返答してください。"
+        ),
     )
     try:
         text = await rag.aquery(question, param=param)
@@ -272,7 +281,7 @@ async def query(
     if not isinstance(text, str):
         text = str(text)
     sources = _extract_sources(text)
-    body = strip_references_block(text).strip()
+    body = _INLINE_CITATION_RE.sub("", strip_references_block(text)).strip()
     return RagAnswer(
         text=body,
         sources=sources,
