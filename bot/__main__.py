@@ -156,14 +156,9 @@ class AskBot(discord.Client):
         self.forty_two: FortyTwoClient | None = None
         ft_uid = os.environ.get("FORTYTWO_UID", "").strip()
         ft_secret = os.environ.get("FORTYTWO_SECRET", "").strip()
-        ft_campus = os.environ.get("FORTYTWO_CAMPUS_ID", "").strip()
         if ft_uid and ft_secret:
             try:
-                self.forty_two = FortyTwoClient(
-                    uid=ft_uid,
-                    secret=ft_secret,
-                    campus_id=int(ft_campus) if ft_campus.isdigit() else None,
-                )
+                self.forty_two = FortyTwoClient(uid=ft_uid, secret=ft_secret)
             except FortyTwoError:
                 logger.exception("FortyTwoClient init failed; /search disabled")
 
@@ -594,19 +589,6 @@ def build_client() -> AskBot:
                 f"`{login}` isn't logged in at any iMac right now.",
             )
             return
-        # If a campus filter is configured, soft-warn when the active session
-        # is at a different campus rather than hide it — sometimes useful
-        # ("they're at 42 Paris this week").
-        campus_warning = ""
-        if (
-            client.forty_two.campus_id is not None
-            and loc.campus_id
-            and loc.campus_id != client.forty_two.campus_id
-        ):
-            campus_warning = (
-                f"\n_⚠️ Different campus: campus_id={loc.campus_id} "
-                f"(this bot is configured for {client.forty_two.campus_id})._"
-            )
 
         embed = discord.Embed(
             title=f"📍 {login}",
@@ -622,8 +604,6 @@ def build_client() -> AskBot:
         embed.add_field(name="Host", value=f"`{loc.host}`", inline=True)
         if loc.begin_at:
             embed.add_field(name="Logged in since", value=loc.begin_at, inline=False)
-        if campus_warning:
-            embed.description = campus_warning.strip()
 
         files: list[discord.File] = []
         if loc.cluster is not None and loc.row is not None and loc.seat is not None:

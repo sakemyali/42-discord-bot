@@ -85,12 +85,11 @@ class FortyTwoClient:
     is fine.
     """
 
-    def __init__(self, uid: str, secret: str, campus_id: int | None = None) -> None:
+    def __init__(self, uid: str, secret: str) -> None:
         if not uid or not secret:
             raise FortyTwoError("FORTYTWO_UID and FORTYTWO_SECRET must be set")
         self.uid = uid
         self.secret = secret
-        self.campus_id = campus_id
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()

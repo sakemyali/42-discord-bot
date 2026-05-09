@@ -116,8 +116,8 @@ Optional:
 - `ASK_CHANNEL_IDS` — comma-separated channel IDs where `/ask` and `/search`
   are allowed. Soft fallback only; the authoritative way to hide a command
   is **Server Settings → Integrations → bot → /ask → Channels** (Discord UI).
-- `FORTYTWO_UID` / `FORTYTWO_SECRET` / `FORTYTWO_CAMPUS_ID` — 42 API
-  credentials for `/search` (see [Locating a student](#locating-a-student)).
+- `FORTYTWO_UID` / `FORTYTWO_SECRET` — 42 API credentials for `/search`
+  (see [Locating a student](#locating-a-student)).
 
 ### 3. Install Ollama + pull a model (optional, for local fallback)
 
@@ -157,10 +157,11 @@ OAuth client-credentials flow.
 Setup:
 
 1. Register an OAuth app at <https://profile.intra.42.fr/oauth/applications>
-   on any 42 student account. Scope `public` is enough.
+   on any 42 student account. Scope `public` is enough; any localhost
+   redirect URI satisfies the form (we use the client_credentials flow,
+   which never redirects).
 2. Copy the UID and SECRET into `.env` as `FORTYTWO_UID` and `FORTYTWO_SECRET`.
-3. Set `FORTYTWO_CAMPUS_ID` to your campus's numeric ID (Tokyo = 26).
-4. Restart the bot.
+3. Restart the bot.
 
 The hostname parser handles `c1r4p5` and `e1r4p5` style names (cluster, row,
 seat). Floors are derived from the host prefix when it looks floor-ish
