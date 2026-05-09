@@ -2,45 +2,82 @@
 
 A staff-support Discord bot for 42Tokyo. Students ask questions in Discord
 with `/ask`; the bot answers from a knowledge graph of intra rules and
-procedures, with inline citations. Greetings get a friendly reply; queries
-the bot can't answer can be escalated to a staff channel.
+procedures. When it can't answer, it spawns paired threads, hands the
+question to staff, and on a single ✅ from an admin it forwards the answer
+back to the asker *and* ingests the Q+A into the corpus so the next ask
+hits it. `/search login:<intra-name>` returns a bilingual card showing
+where any 42 student is currently sitting.
 
 Built around **LightRAG** (graph + vector retrieval) over the 42Tokyo
-intra knowledge base — 60+ pages, mostly Japanese with some English.
+intra knowledge base — 60+ pages, mostly Japanese with some English —
+plus the live 42 intra API for real-time location lookups.
+
+![/ask in action](docs/screenshots/ask-example.png)
+
+## Features
+
+- **`/ask <question>`** — Japanese or English. Replies in staff-DM voice
+  (no markdown clutter, no citations) from the LightRAG graph.
+- **`/search login:<intra-name>`** — bilingual EN/JA card showing the
+  iMac the student is currently sitting at: cluster · floor · row · seat,
+  with a live "logged in N minutes ago" timer.
+- **Self-healing escalation** — `[NO_CORPUS_ANSWER]` spawns a thread on
+  each side; the staff answer is forwarded to the asker, persisted to
+  `corpus/discord-qa/`, and live-ingested into LightRAG so the same
+  question answers from the corpus next time.
+- **Greeting gate** — "hi" / "こんにちは" bypass RAG and get a friendly
+  bilingual welcome with example queries.
+- **Channel allowlist** — `ASK_CHANNEL_IDS` soft-restricts both commands
+  to specific channels; Discord's per-command channel UI is the
+  authoritative gate.
+- **Activity log** — every greeting / answer / escalation / resolution /
+  error mirrors to `BOT_LOG_CHANNEL_ID` as a color-coded embed.
 
 ## Architecture
 
-```
-                 Discord
-                    │ /ask <question>
-                    ▼
-        ┌───────────────────────────────────────────────┐
-        │ bot/__main__.py                               │
-        │   • greeting / intent gate (no RAG for "hi")  │
-        │   • slash command, deferred reply             │
-        │   • answer / sources / escalation embed       │
-        └─────────────────────┬─────────────────────────┘
-                              │
-                              ▼
-        ┌───────────────────────────────────────────────┐
-        │ bot/rag.py — LightRAG (mode = mix)            │
-        │   1. extract entities from question      ←LLM │
-        │   2. cosine over chunks (multilingual)   ←emb │
-        │   3. graph traversal entity / relation        │
-        │   4. answer assembly with [N] citations  ←LLM │
-        └──┬──────────────────────────┬─────────────────┘
-           │                          │
-           ▼                          ▼
-    sentence-transformers         Groq qwen3-32b      (ingest, recommended)
-    paraphrase-multilingual       Gemini 2.5-flash    (queries / fallback)
-    -MiniLM-L12-v2  (384-d)       Ollama qwen2.5:7b   (local fallback)
+```mermaid
+flowchart TD
+    User([Discord user])
+    User -->|"/ask question"| Bot
+    User -->|"/search login"| Bot
+    User -->|"✅ on staff thread"| Bot
 
-        ┌───────────────────────────────────────────────┐
-        │ rag_storage/   (regenerable, gitignored)      │
-        │   ├─ KV stores              (JSON)            │
-        │   ├─ vector DB              (NanoVectorDB)    │
-        │   └─ knowledge graph        (NetworkX, *.graphml)
-        └───────────────────────────────────────────────┘
+    subgraph Bot["bot/__main__.py"]
+        direction TB
+        Greet["greeting gate<br/>(bypasses RAG)"]
+        Cmd["slash commands<br/>+ allowlist guard"]
+        Esc["escalation flow<br/>paired threads · ✅ watcher"]
+    end
+
+    Bot -->|"/ask"| Rag
+    Bot -->|"/search"| FortyTwo
+    Bot -->|"on resolve: persist + re-ingest"| Corpus[("corpus/discord-qa/")]
+
+    subgraph Rag["bot/rag.py · LightRAG (mix)"]
+        direction TB
+        R1["1. extract entities ←LLM"]
+        R2["2. cosine over chunks ←emb"]
+        R3["3. graph traversal"]
+        R4["4. answer assembly ←LLM"]
+        R1 --> R2 --> R3 --> R4
+    end
+
+    subgraph FortyTwo["bot/forty_two.py · 42 intra API"]
+        F1["OAuth client_credentials<br/>+ token cache"]
+        F2["GET /v2/users/:login/locations"]
+        F1 --> F2
+    end
+
+    Rag --> Embed[/"sentence-transformers<br/>multilingual MiniLM (384-d)"/]
+    Rag --> LLM[/"Gemini 2.5-flash · Groq · Ollama"/]
+
+    subgraph Storage["rag_storage/ (gitignored)"]
+        S1["JSON KV stores"]
+        S2["NanoVectorDB chunks + entities"]
+        S3["NetworkX graph (*.graphml)"]
+    end
+    Rag --> Storage
+    Corpus -.->|"make ingest"| Rag
 ```
 
 The graph that ships in this repo (593 entities / 269 relations) was
@@ -53,22 +90,26 @@ built once via a one-off cached-response trick (see
 discordBot/
 ├── bot/
 │   ├── __init__.py
-│   ├── __main__.py          # discord client + /ask + greeting gate
+│   ├── __main__.py          # discord client, /ask, /search, escalation flow
+│   ├── forty_two.py         # 42 intra API client (OAuth, locations endpoint)
 │   ├── ingest.py            # CLI: walk corpus/ and ainsert into LightRAG
 │   ├── llm.py               # deprecated stub (LightRAG handles generation now)
 │   └── rag.py               # build_rag, query, citation extraction
 ├── corpus/
 │   ├── README.md
-│   └── intra/               # 60 converted intra pages — the knowledge base
+│   ├── intra/               # 60 converted intra pages — base knowledge
+│   └── discord-qa/          # historical staff Q&A + live escalation answers
 ├── cache/
 │   ├── claude_chunks.jsonl    # 100 chunks dumped via LightRAG's chunker
 │   └── claude_responses.json  # cached entity-extraction responses (replay source)
 ├── scripts/
 │   ├── convert_qa.py        # HTML/PDF → markdown (trafilatura + bs4 + pdftotext)
+│   ├── mine_discord_qa.py   # extract Q&A pairs from Discord export
 │   ├── dump_chunks.py       # walk corpus → cache/claude_chunks.jsonl
 │   ├── claude_ingest.py     # ingest using cached responses (no API calls)
 │   ├── ingest_status.py     # snapshot for `make ingest-status`
 │   └── retry_failed.py      # cleanup + retry for stuck docs (Ollama path)
+├── docs/screenshots/        # README images
 ├── research/                # pre-build design notes (8 docs)
 ├── Q&A/                     # local-only raw HTML/PDF source (gitignored)
 ├── rag_storage/             # generated LightRAG state (gitignored)
@@ -156,6 +197,8 @@ for how long they've been logged in. Powered by the
 [42 intra API](https://api.intra.42.fr/apidoc/2.0/locations.html) over the
 OAuth client-credentials flow.
 
+![/search card](docs/screenshots/search-card.png)
+
 Setup:
 
 1. Register an OAuth app at <https://profile.intra.42.fr/oauth/applications>
@@ -176,31 +219,54 @@ works.
 
 ## Staff escalation flow
 
-When LightRAG returns its `[NO_CORPUS_ANSWER]` sentinel, the bot doesn't just
-forward the question to staff — it spawns a thread on each side and closes
-the loop:
+When LightRAG returns its `[NO_CORPUS_ANSWER]` sentinel, the bot spawns a
+thread on each side and closes the loop on a single ✅ reaction:
 
-1. **Student thread** — spawned off the bot's "passed to staff" reply. The
-   eventual answer lands here, with the asker pinged.
-2. **Staff thread** — spawned off the staff-channel embed. The on-call admin
-   types the answer in the thread and reacts ✅ to their own message.
-3. On ✅ from a member of `ADMIN_ROLE_ID`:
-   - The answer is forwarded to the student thread (with `@asker`).
-   - A new file `corpus/discord-qa/<date>-staff-answer-<thread_id>.md` is
-     written and live-ingested into LightRAG, so the same question now
-     answers from the corpus on next ask. The on-disk markdown survives
-     future `make ingest` rebuilds via LightRAG's content-hash dedup.
-   - The staff thread is archived + locked.
-   - A 🟢 Resolved embed lands in `BOT_LOG_CHANNEL_ID`.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Student
+    participant Bot
+    actor Admin
+    participant LightRAG
 
-Required for this flow: `STAFF_CHANNEL_ID`, `ADMIN_ROLE_ID`, the
-`Add Reactions` / `Create Public Threads` / `Manage Threads` bot permissions
-on both channels, and Message Content Intent in the Developer Portal.
+    Student->>Bot: /ask <off-corpus question>
+    Bot->>LightRAG: query
+    LightRAG-->>Bot: [NO_CORPUS_ANSWER]
+    Bot->>Student: "passed to staff" reply
+    Bot-->>Student: spawn student thread
+    Bot->>Admin: staff embed in #staff (pings @admin)
+    Bot-->>Admin: spawn staff thread
+    Note over Bot: pending_escalations[staff_thread_id] = ctx
 
-Known limitation: in-flight escalations are tracked in memory. A bot restart
-between escalation and the ✅ reaction drops the context — the reaction
-becomes a no-op. Acceptable for the demo; production would persist the
-mapping to a file.
+    Admin->>Bot: types answer in staff thread
+    Admin->>Bot: ✅ reaction on own message
+    Bot->>Bot: on_raw_reaction_add → role check
+    Bot->>Student: forward "<@asker> 担当者からの回答です: …" in student thread
+    Bot->>LightRAG: insert_documents(staff-answer.md)
+    Bot->>Bot: write corpus/discord-qa/<date>-staff-answer-<id>.md
+    Bot-->>Admin: archive + lock staff thread
+    Bot->>Bot: 🟢 Resolved embed → log channel
+```
+
+The staff thread side:
+
+![staff thread with admin reply + ✅](docs/screenshots/escalation-staff-thread.png)
+
+The student side, post-resolution:
+
+![student thread receives forwarded answer](docs/screenshots/escalation-student-thread.png)
+
+**Required for this flow**: `STAFF_CHANNEL_ID`, `ADMIN_ROLE_ID`, the
+`Create Public Threads` / `Send Messages in Threads` / `Manage Threads`
+bot permissions on both channels, and Message Content Intent in the
+Developer Portal. The bot uses `on_raw_reaction_add` so cache-miss on
+freshly created thread messages doesn't drop the ✅.
+
+**Known limitation**: in-flight escalations are tracked in memory. A bot
+restart between escalation and the ✅ drops the context — the reaction
+becomes a no-op. Acceptable for the demo; production would persist
+`pending_escalations` to a file.
 
 ## Make targets
 
@@ -346,7 +412,13 @@ Without it, sync is global and takes up to an hour to propagate.
 
 ## Roadmap
 
-- 42 API integration: identity verification, `/me` dashboard, Black Hole alerts.
+Done:
+- ✅ 42 API integration — `/search login` returns live iMac location.
+- ✅ Self-healing escalation loop — staff answers ingest back into the corpus.
+
+Still on the wishlist:
+- `/me` dashboard — Black Hole countdown, current project, peer-review queue.
 - Feedback loop: thumbs-up/down reactions feed a curated answer store.
-- Eval set + retrieval metrics.
+- Eval set + retrieval metrics (precision@k, mode comparison).
 - Hyperlinked citations back to the source intra page.
+- Persist `pending_escalations` to disk so a bot restart doesn't drop in-flight escalations.
