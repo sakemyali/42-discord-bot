@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,7 +21,7 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
-from .rag import QueryFailed, RagAnswer, build_rag, query, working_dir_path
+from .rag import QueryFailed, RagAnswer, build_rag, default_corpus_path, insert_documents, query, working_dir_path
 
 # Discord message hard cap is 2000 chars. We trim with a tail "..." marker.
 _DISCORD_MSG_CAP = 1900
@@ -104,17 +105,42 @@ def _format_error(err: str) -> str:
     )
 
 
+@dataclass
+class EscalationContext:
+    """One in-flight `[NO_CORPUS_ANSWER]` escalation awaiting a staff answer."""
+
+    staff_thread_id: int
+    student_thread_id: int
+    asker_id: int
+    channel_id: int
+    question: str
+    created_at: datetime
+
+
 class AskBot(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.default()
+        # Required to read `reaction.message.content` so we can ingest staff
+        # answers back into LightRAG. Must also be toggled on in the Discord
+        # Developer Portal → Bot tab → "Message Content Intent".
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip()
         self.staff_channel_id = os.environ.get("STAFF_CHANNEL_ID", "").strip()
         self.admin_role_id = os.environ.get("ADMIN_ROLE_ID", "").strip()
         self.log_channel_id = os.environ.get("BOT_LOG_CHANNEL_ID", "").strip()
+        # Comma-separated channel IDs where /ask is allowed. Empty = unrestricted.
+        # Authoritative restriction is per-channel slash-command visibility in
+        # Server Settings → Integrations; this is a fallback guard.
+        raw_ask_channels = os.environ.get("ASK_CHANNEL_IDS", "").strip()
+        self.allowed_channel_ids: set[int] = {
+            int(x) for x in (p.strip() for p in raw_ask_channels.split(",")) if x.isdigit()
+        }
         self.rag: object | None = None  # LightRAG instance, set in setup_hook
         self.query_counts: dict[int, int] = {}  # user_id -> queries this session
+        # Keyed by staff_thread_id. In-memory only — restart drops in-flight escalations.
+        self.pending_escalations: dict[int, EscalationContext] = {}
 
     async def setup_hook(self) -> None:
         wd = working_dir_path()
@@ -189,16 +215,16 @@ class AskBot(discord.Client):
         question: str,
         asker: discord.abc.User,
         reason: str = "Question failed, needs staff input",
-    ) -> None:
+    ) -> discord.Message | None:
         if not self.staff_channel_id:
-            return
+            return None
         try:
             ch = self.get_channel(int(self.staff_channel_id)) or await self.fetch_channel(
                 int(self.staff_channel_id)
             )
         except Exception:
             logger.exception("could not fetch staff channel")
-            return
+            return None
         embed = discord.Embed(
             title=reason,
             description=question,
@@ -207,13 +233,111 @@ class AskBot(discord.Client):
         embed.add_field(name="Asked by", value=asker.mention, inline=False)
         mention = f"<@&{self.admin_role_id}>" if self.admin_role_id else ""
         try:
-            await ch.send(
+            return await ch.send(
                 content=mention or None,
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(roles=True, users=True),
             )
         except Exception:
             logger.exception("failed to post to staff")
+            return None
+
+    async def on_reaction_add(
+        self, reaction: discord.Reaction, user: discord.User | discord.Member
+    ) -> None:
+        """Resolve a staff escalation when an admin reacts ✅ in the staff thread."""
+        if user.bot:
+            return
+        if str(reaction.emoji) != "✅":
+            return
+        ctx = self.pending_escalations.get(reaction.message.channel.id)
+        if ctx is None:
+            return
+        if not isinstance(user, discord.Member):
+            return
+        if not self.admin_role_id:
+            return
+        try:
+            admin_role_id = int(self.admin_role_id)
+        except ValueError:
+            return
+        if not any(r.id == admin_role_id for r in user.roles):
+            return
+        # Pop before resolving so a second admin reacting is a no-op.
+        self.pending_escalations.pop(ctx.staff_thread_id, None)
+        await self._resolve_escalation(ctx, reaction.message, user)
+
+    async def _resolve_escalation(
+        self,
+        ctx: EscalationContext,
+        answer_msg: discord.Message,
+        admin: discord.Member,
+    ) -> None:
+        """Forward staff answer to student, ingest into corpus + LightRAG, archive thread."""
+        answer_text = (answer_msg.content or "").strip()
+        is_ja = bool(_JA_CHAR_RE.search(ctx.question))
+        prefix = "担当者からの回答です:" if is_ja else "Answer from staff:"
+
+        # 1. Forward to student thread — highest priority.
+        try:
+            thread = self.get_channel(ctx.student_thread_id) or await self.fetch_channel(
+                ctx.student_thread_id
+            )
+            await thread.send(
+                f"<@{ctx.asker_id}> {prefix}\n\n{answer_text}",
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except Exception:
+            logger.exception("failed to forward staff answer to student thread")
+
+        # 2. Persist to corpus on disk + ingest into running LightRAG. Best-effort.
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        slug = f"discord-qa/{today}-staff-answer-{ctx.staff_thread_id}.md"
+        md = (
+            f"# {ctx.question[:80]}\n\n"
+            f"**Source**: 42 Tokyo Discord, {today}\n"
+            f"**Tags**: staff-answer, escalation\n\n"
+            f"## Q\n\n{ctx.question}\n\n"
+            f"## A\n\n(@{admin.name}, staff): {answer_text}\n"
+        )
+        ingest_status = "ok"
+        try:
+            disk_path = default_corpus_path() / slug
+            disk_path.parent.mkdir(parents=True, exist_ok=True)
+            disk_path.write_text(md, encoding="utf-8")
+        except Exception as exc:
+            logger.exception("failed to write staff answer to corpus on disk")
+            ingest_status = f"disk write failed: {type(exc).__name__}"
+        try:
+            if self.rag is not None:
+                await insert_documents(self.rag, [(slug, md)])
+        except Exception as exc:
+            logger.exception("failed to ingest staff answer into LightRAG")
+            # Disk write may have succeeded — preserve that signal.
+            ingest_status = (
+                f"ingest failed: {type(exc).__name__}"
+                if ingest_status == "ok"
+                else f"{ingest_status}; ingest failed: {type(exc).__name__}"
+            )
+
+        # 3. Archive + lock the staff thread.
+        try:
+            await answer_msg.channel.edit(archived=True, locked=True)
+        except Exception:
+            logger.exception("failed to archive staff thread")
+
+        # 4. Log the resolution.
+        await self.post_log(
+            title="🟢 Resolved",
+            color=discord.Color.green(),
+            fields=[
+                ("Asked by", f"<@{ctx.asker_id}>"),
+                ("Question", ctx.question),
+                ("Answer", answer_text),
+                ("Resolved by", admin.mention),
+                ("Ingest", ingest_status),
+            ],
+        )
 
 
 def build_client() -> AskBot:
@@ -222,6 +346,15 @@ def build_client() -> AskBot:
     @client.tree.command(name="ask", description="Ask the 42 Tokyo rules bot")
     @app_commands.describe(question="What do you want to know?")
     async def ask(interaction: discord.Interaction, question: str) -> None:
+        if (
+            client.allowed_channel_ids
+            and interaction.channel_id not in client.allowed_channel_ids
+        ):
+            first = next(iter(client.allowed_channel_ids))
+            await interaction.response.send_message(
+                f"Please use this in <#{first}>.", ephemeral=True,
+            )
+            return
         client.query_counts[interaction.user.id] = (
             client.query_counts.get(interaction.user.id, 0) + 1
         )
@@ -250,20 +383,54 @@ def build_client() -> AskBot:
             cached = elapsed < 1.0  # LLM calls take ≥2s; cache hits are sub-second
             if "[NO_CORPUS_ANSWER]" in ans.text:
                 logger.info("escalating to staff (no answer in corpus): %s", question)
-                await client.post_to_staff(
+                staff_msg = await client.post_to_staff(
                     question, interaction.user,
                     reason="Outside corpus, needs human answer",
                 )
-                await interaction.followup.send(_escalation_reply(question))
+                staff_thread: discord.Thread | None = None
+                if staff_msg is not None:
+                    try:
+                        staff_thread = await staff_msg.create_thread(
+                            name=f"Q: {question[:60]}",
+                            auto_archive_duration=1440,
+                        )
+                    except Exception:
+                        logger.exception("failed to create staff thread")
+
+                student_msg = await interaction.followup.send(
+                    _escalation_reply(question), wait=True,
+                )
+                student_thread: discord.Thread | None = None
+                try:
+                    student_thread = await student_msg.create_thread(
+                        name=f"Q from {interaction.user.display_name}",
+                        auto_archive_duration=1440,
+                    )
+                except Exception:
+                    logger.exception("failed to create student thread")
+
+                if staff_thread is not None and student_thread is not None:
+                    client.pending_escalations[staff_thread.id] = EscalationContext(
+                        staff_thread_id=staff_thread.id,
+                        student_thread_id=student_thread.id,
+                        asker_id=interaction.user.id,
+                        channel_id=interaction.channel_id or 0,
+                        question=question,
+                        created_at=datetime.now(timezone.utc),
+                    )
+
+                fields = [
+                    ("Asked by", f"{interaction.user.mention} (use #{count})"),
+                    ("Question", question),
+                    ("Time", f"{elapsed:.2f}s"),
+                    ("Cached", "yes" if cached else "no"),
+                ]
+                if staff_thread is not None:
+                    fields.append(("Staff thread", staff_thread.mention))
                 await client.post_log(
                     title="🟠 Escalated, outside corpus",
                     color=discord.Color.orange(),
-                    fields=[
-                        ("Asked by", f"{interaction.user.mention} (use #{count})"),
-                        ("Question", question),
-                        ("Time", f"{elapsed:.2f}s"),
-                        ("Cached", "yes" if cached else "no"),
-                    ],
+                    fields=fields,
                 )
                 return
             await interaction.followup.send(_format_answer(ans))
