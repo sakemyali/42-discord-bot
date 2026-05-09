@@ -434,10 +434,21 @@ def build_client() -> AskBot:
                 )
                 student_thread: discord.Thread | None = None
                 try:
-                    student_thread = await student_msg.create_thread(
-                        name=f"Q from {interaction.user.display_name}",
-                        auto_archive_duration=1440,
-                    )
+                    # interaction.followup.send returns a WebhookMessage with
+                    # no guild attached, and Message.create_thread requires a
+                    # guild. Refetch via the channel to get a proper Message.
+                    channel = interaction.channel
+                    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+                        proper_student_msg = await channel.fetch_message(student_msg.id)
+                        student_thread = await proper_student_msg.create_thread(
+                            name=f"Q from {interaction.user.display_name}",
+                            auto_archive_duration=1440,
+                        )
+                    else:
+                        logger.warning(
+                            "can't create student thread: channel %s is not text-capable",
+                            type(channel).__name__,
+                        )
                 except Exception:
                     logger.exception("failed to create student thread")
 
