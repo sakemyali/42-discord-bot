@@ -7,6 +7,7 @@ on any error so users never see a stack trace.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import re
@@ -20,6 +21,13 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
+from .cluster_map import render_cluster_map
+from .forty_two import (
+    ActiveLocation,
+    FortyTwoClient,
+    FortyTwoError,
+    FortyTwoUnknownLogin,
+)
 from .rag import QueryFailed, RagAnswer, build_rag, default_corpus_path, insert_documents, query, working_dir_path
 
 if TYPE_CHECKING:
@@ -143,6 +151,21 @@ class AskBot(discord.Client):
         self.query_counts: dict[int, int] = {}  # user_id -> queries this session
         # Keyed by staff_thread_id. In-memory only — restart drops in-flight escalations.
         self.pending_escalations: dict[int, EscalationContext] = {}
+        # 42 API client for /search. Built lazily so the bot still boots if creds
+        # aren't configured — /search will then return a friendly "not configured".
+        self.forty_two: FortyTwoClient | None = None
+        ft_uid = os.environ.get("FORTYTWO_UID", "").strip()
+        ft_secret = os.environ.get("FORTYTWO_SECRET", "").strip()
+        ft_campus = os.environ.get("FORTYTWO_CAMPUS_ID", "").strip()
+        if ft_uid and ft_secret:
+            try:
+                self.forty_two = FortyTwoClient(
+                    uid=ft_uid,
+                    secret=ft_secret,
+                    campus_id=int(ft_campus) if ft_campus.isdigit() else None,
+                )
+            except FortyTwoError:
+                logger.exception("FortyTwoClient init failed; /search disabled")
 
     async def setup_hook(self) -> None:
         wd = working_dir_path()
@@ -522,6 +545,113 @@ def build_client() -> AskBot:
                 ],
                 ping_admin=True,
             )
+
+    @client.tree.command(
+        name="search",
+        description="Find a 42 student's current iMac (cluster, row, seat).",
+    )
+    @app_commands.describe(login="42 intra login, e.g. emoulaya")
+    async def search(interaction: discord.Interaction, login: str) -> None:
+        if (
+            client.allowed_channel_ids
+            and interaction.channel_id not in client.allowed_channel_ids
+        ):
+            first = next(iter(client.allowed_channel_ids))
+            await interaction.response.send_message(
+                f"Please use this in <#{first}>.", ephemeral=True,
+            )
+            return
+        login = login.strip().lstrip("@")
+        if not login:
+            await interaction.response.send_message(
+                "Please provide a 42 login.", ephemeral=True,
+            )
+            return
+        if client.forty_two is None:
+            await interaction.response.send_message(
+                "42 API isn't configured on this bot. Set `FORTYTWO_UID` "
+                "and `FORTYTWO_SECRET` in `.env` and restart.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            loc = await client.forty_two.get_active_location(login)
+        except FortyTwoUnknownLogin:
+            await interaction.followup.send(
+                f"No 42 user `{login}`.", ephemeral=True,
+            )
+            return
+        except FortyTwoError as exc:
+            logger.warning("42 API call failed for %s: %s", login, exc)
+            await interaction.followup.send(
+                "Couldn't reach the 42 API right now. Try again in a minute.",
+                ephemeral=True,
+            )
+            return
+        if loc is None:
+            await interaction.followup.send(
+                f"`{login}` isn't logged in at any iMac right now.",
+            )
+            return
+        # If a campus filter is configured, soft-warn when the active session
+        # is at a different campus rather than hide it — sometimes useful
+        # ("they're at 42 Paris this week").
+        campus_warning = ""
+        if (
+            client.forty_two.campus_id is not None
+            and loc.campus_id
+            and loc.campus_id != client.forty_two.campus_id
+        ):
+            campus_warning = (
+                f"\n_⚠️ Different campus: campus_id={loc.campus_id} "
+                f"(this bot is configured for {client.forty_two.campus_id})._"
+            )
+
+        embed = discord.Embed(
+            title=f"📍 {login}",
+            color=discord.Color.blurple(),
+        )
+        if loc.cluster is not None:
+            seat_str = f"Cluster {loc.cluster} · Row {loc.row} · Seat {loc.seat}"
+        else:
+            seat_str = "(host format not recognized)"
+        embed.add_field(name="Seat", value=seat_str, inline=False)
+        if loc.floor:
+            embed.add_field(name="Floor", value=loc.floor, inline=True)
+        embed.add_field(name="Host", value=f"`{loc.host}`", inline=True)
+        if loc.begin_at:
+            embed.add_field(name="Logged in since", value=loc.begin_at, inline=False)
+        if campus_warning:
+            embed.description = campus_warning.strip()
+
+        files: list[discord.File] = []
+        if loc.cluster is not None and loc.row is not None and loc.seat is not None:
+            try:
+                png = render_cluster_map(
+                    cluster=loc.cluster,
+                    row=loc.row,
+                    seat=loc.seat,
+                    floor=loc.floor,
+                )
+                file = discord.File(io.BytesIO(png), filename="cluster.png")
+                embed.set_image(url="attachment://cluster.png")
+                files.append(file)
+            except Exception:
+                logger.exception("cluster map render failed")
+
+        await interaction.followup.send(embed=embed, files=files)
+
+        await client.post_log(
+            title="🔎 Searched location",
+            color=discord.Color.blurple(),
+            fields=[
+                ("Searched by", interaction.user.mention),
+                ("Login", login),
+                ("Host", loc.host or "—"),
+                ("Seat", seat_str),
+            ],
+        )
 
     return client
 
