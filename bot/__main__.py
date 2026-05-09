@@ -20,6 +20,12 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
+from .forty_two import (
+    ActiveLocation,
+    FortyTwoClient,
+    FortyTwoError,
+    FortyTwoUnknownLogin,
+)
 from .rag import QueryFailed, RagAnswer, build_rag, default_corpus_path, insert_documents, query, working_dir_path
 
 if TYPE_CHECKING:
@@ -98,6 +104,53 @@ def _format_answer(ans: RagAnswer) -> str:
     return msg
 
 
+def _build_location_embed(login: str, loc: ActiveLocation) -> discord.Embed:
+    """Bilingual EN/JA card for /search. Uses Discord's <t:UNIX:R> for live duration."""
+    embed = discord.Embed(
+        title=f"📍 {login}",
+        color=discord.Color.blurple(),
+    )
+    if loc.cluster is not None:
+        embed.add_field(
+            name="🏢 Cluster / クラスター",
+            value=f"**{loc.cluster}**",
+            inline=True,
+        )
+        if loc.floor:
+            embed.add_field(
+                name="📐 Floor / 階",
+                value=f"**{loc.floor}**",
+                inline=True,
+            )
+        embed.add_field(
+            name="⌨️ Row · Seat / 列・席",
+            value=f"**R{loc.row} · P{loc.seat}**",
+            inline=True,
+        )
+    else:
+        embed.add_field(
+            name="🖥️ Host / ホスト名",
+            value=f"`{loc.host or '—'}`",
+            inline=False,
+        )
+
+    duration_value = "—"
+    if loc.begin_at:
+        try:
+            dt = datetime.fromisoformat(loc.begin_at.replace("Z", "+00:00"))
+            unix = int(dt.timestamp())
+            duration_value = f"<t:{unix}:R> · <t:{unix}:t>"
+        except ValueError:
+            duration_value = loc.begin_at
+    embed.add_field(
+        name="⏱️ Logged in / ログイン中",
+        value=duration_value,
+        inline=False,
+    )
+    embed.set_footer(text=f"host: {loc.host}" if loc.host else "")
+    return embed
+
+
 def _format_error(err: str) -> str:
     """Plain-text error reply. Friendlier than a stack trace."""
     return (
@@ -143,6 +196,16 @@ class AskBot(discord.Client):
         self.query_counts: dict[int, int] = {}  # user_id -> queries this session
         # Keyed by staff_thread_id. In-memory only — restart drops in-flight escalations.
         self.pending_escalations: dict[int, EscalationContext] = {}
+        # 42 API client for /search. Built lazily so the bot still boots if creds
+        # aren't configured — /search will then return a friendly "not configured".
+        self.forty_two: FortyTwoClient | None = None
+        ft_uid = os.environ.get("FORTYTWO_UID", "").strip()
+        ft_secret = os.environ.get("FORTYTWO_SECRET", "").strip()
+        if ft_uid and ft_secret:
+            try:
+                self.forty_two = FortyTwoClient(uid=ft_uid, secret=ft_secret)
+            except FortyTwoError:
+                logger.exception("FortyTwoClient init failed; /search disabled")
 
     async def setup_hook(self) -> None:
         wd = working_dir_path()
@@ -522,6 +585,68 @@ def build_client() -> AskBot:
                 ],
                 ping_admin=True,
             )
+
+    @client.tree.command(
+        name="search",
+        description="Find a 42 student's current iMac (cluster, row, seat).",
+    )
+    @app_commands.describe(login="42 intra login, e.g. emoulaya")
+    async def search(interaction: discord.Interaction, login: str) -> None:
+        if (
+            client.allowed_channel_ids
+            and interaction.channel_id not in client.allowed_channel_ids
+        ):
+            first = next(iter(client.allowed_channel_ids))
+            await interaction.response.send_message(
+                f"Please use this in <#{first}>.", ephemeral=True,
+            )
+            return
+        login = login.strip().lstrip("@")
+        if not login:
+            await interaction.response.send_message(
+                "Please provide a 42 login.", ephemeral=True,
+            )
+            return
+        if client.forty_two is None:
+            await interaction.response.send_message(
+                "42 API isn't configured on this bot. Set `FORTYTWO_UID` "
+                "and `FORTYTWO_SECRET` in `.env` and restart.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        try:
+            loc = await client.forty_two.get_active_location(login)
+        except FortyTwoUnknownLogin:
+            await interaction.followup.send(
+                f"No 42 user `{login}`.", ephemeral=True,
+            )
+            return
+        except FortyTwoError as exc:
+            logger.warning("42 API call failed for %s: %s", login, exc)
+            await interaction.followup.send(
+                "Couldn't reach the 42 API right now. Try again in a minute.",
+                ephemeral=True,
+            )
+            return
+        if loc is None:
+            await interaction.followup.send(
+                f"`{login}` isn't logged in at any iMac right now.",
+            )
+            return
+
+        embed = _build_location_embed(login, loc)
+        await interaction.followup.send(embed=embed)
+
+        await client.post_log(
+            title="🔎 Searched location",
+            color=discord.Color.blurple(),
+            fields=[
+                ("Searched by", interaction.user.mention),
+                ("Login", login),
+                ("Host", loc.host or "—"),
+            ],
+        )
 
     return client
 

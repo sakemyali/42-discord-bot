@@ -113,9 +113,11 @@ Optional:
   answers via ✅ reaction (see [Staff escalation flow](#staff-escalation-flow)).
 - `BOT_LOG_CHANNEL_ID` — channel where the bot mirrors all activity (boot,
   queries, escalations, resolutions, errors).
-- `ASK_CHANNEL_IDS` — comma-separated channel IDs where `/ask` is allowed.
-  Soft fallback only; the authoritative way to hide the command is **Server
-  Settings → Integrations → bot → /ask → Channels** (Discord UI).
+- `ASK_CHANNEL_IDS` — comma-separated channel IDs where `/ask` and `/search`
+  are allowed. Soft fallback only; the authoritative way to hide a command
+  is **Server Settings → Integrations → bot → /ask → Channels** (Discord UI).
+- `FORTYTWO_UID` / `FORTYTWO_SECRET` — 42 API credentials for `/search`
+  (see [Locating a student](#locating-a-student)).
 
 ### 3. Install Ollama + pull a model (optional, for local fallback)
 
@@ -144,6 +146,33 @@ In Discord:
 ```
 
 Replies are an embed with the answer + cited filenames + the query mode used.
+
+## Locating a student
+
+`/search login:emoulaya` returns a small bilingual (EN / JA) card with
+the iMac the student is currently sitting at — cluster, floor (when the
+host name encodes it), row · seat — and Discord's live relative timestamp
+for how long they've been logged in. Powered by the
+[42 intra API](https://api.intra.42.fr/apidoc/2.0/locations.html) over the
+OAuth client-credentials flow.
+
+Setup:
+
+1. Register an OAuth app at <https://profile.intra.42.fr/oauth/applications>
+   on any 42 student account. Scope `public` is enough; any localhost
+   redirect URI satisfies the form (we use the client_credentials flow,
+   which never redirects).
+2. Copy the UID and SECRET into `.env` as `FORTYTWO_UID` and `FORTYTWO_SECRET`.
+3. Restart the bot.
+
+The hostname parser handles `c1r4p5` and `e1r4p5` style names (cluster, row,
+seat). Floors are derived from the host prefix when it looks floor-ish
+(`e1` → "1F"); otherwise the floor field is omitted. If the format isn't
+recognized the embed shows the raw host instead of parsed coordinates.
+
+Without `FORTYTWO_UID` / `FORTYTWO_SECRET` set, `/search` replies with a
+friendly "not configured" ephemeral message — the rest of the bot still
+works.
 
 ## Staff escalation flow
 
